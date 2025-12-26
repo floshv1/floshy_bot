@@ -1,5 +1,5 @@
 # Makefile
-.PHONY: install dev sync run test lint format clean
+.PHONY: install dev sync add add-dev update run test test-cov lint format clean clean-docker docker-build docker-build-no-cache docker-up docker-down docker-logs docker-restart docker-shell docker-build-prod docker-run-prod show-deps show-outdated venv-activate help
 
 # Installation et gestion des dépendances avec UV
 install:
@@ -25,23 +25,23 @@ update:
 	uv lock --upgrade
 
 # Lancement
-run:
-	uv run python -m src.main
+run: docker-up
+	docker compose exec -T bot uv run python -m src.main
 
 # Tests et qualité de code
 test:
-	uv run pytest
+	docker compose exec -T bot uv run pytest
 
 test-cov:
-	uv run pytest --cov=src --cov-report=html
+	docker compose exec -T bot uv run pytest --cov=src --cov-report=html
 
 lint:
-	uv run ruff check src/ tests/
-	uv run mypy src/
+	docker compose exec -T bot uv run ruff check src/ tests/
+	docker compose exec -T bot uv run mypy src/
 
 format:
-	uv run black src/ tests/
-	uv run ruff check --fix src/ tests/
+	docker compose exec -T bot uv run black src/ tests/
+	docker compose exec -T bot uv run ruff check --fix src/ tests/
 
 # Docker avec UV
 docker-build:
@@ -89,10 +89,13 @@ clean-docker:
 
 # Utilitaires
 show-deps:
-	uv pip list
+	docker-compose exec -T bot uv pip list
 
 show-outdated:
-	uv pip list --outdated
+	docker-compose exec -T bot uv pip list --outdated
 
 venv-activate:
 	@echo "Run: source .venv/bin/activate"
+
+
+
