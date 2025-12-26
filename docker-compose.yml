@@ -1,0 +1,40 @@
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: floshy-bot
+    restart: unless-stopped
+    
+    env_file:
+      - .env
+    
+    volumes:
+      - ./data:/app/data
+      - uv-cache:/root/.cache/uv
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    
+    networks:
+      - bot-network
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  bot-network:
+    driver: bridge
+
+volumes:
+  uv-cache:
+    driver: local
