@@ -50,8 +50,29 @@ env/
 .pytest_cache/
 .coverage
 htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Logs
+logs/
+*.log
+deploy.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SSH keys
+scripts/*.pub
+scripts/github_deploy
+scripts/github_deploy.pub
+
+.coverage
+htmlcov/
 
 # Data and logs
 data/
 logs/
 *.log
+
+setup/

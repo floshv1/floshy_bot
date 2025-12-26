@@ -11,6 +11,7 @@ services:
     
     volumes:
       - ./data:/app/data
+      - ./logs:/app/logs
       - uv-cache:/root/.cache/uv   
 
     networks:

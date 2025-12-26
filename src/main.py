@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 from loguru import logger
 
-from utils.logger import setup_logger
+from .utils.logger import setup_logger
 
 # Charger les variables d'environnement
 load_dotenv()
@@ -53,7 +53,7 @@ class DiscordBot(commands.Bot):
                 continue
             
             try:
-                await self.load_extension(f'cogs.{cog_file.stem}')
+                await self.load_extension(f'src.cogs.{cog_file.stem}')
                 logger.success(f"Cog chargé : {cog_file.stem}")
                 loaded += 1
             except Exception as e:
