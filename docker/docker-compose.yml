@@ -24,6 +24,7 @@ services:
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_POLL_INTERVAL=300
       - WATCHTOWER_NOTIFICATION_URL=${WATCHTOWER_NOTIFICATION_URL:-}
+      - DOCKER_MIN_API_VERSION=1.24
     command: --cleanup --label-enable --interval 300
     restart: unless-stopped
     networks:
