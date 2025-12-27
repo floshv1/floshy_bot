@@ -5,11 +5,11 @@ services:
     restart: unless-stopped
     
     env_file:
-      - .env
+      - ../.env
     
     volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
+      - ../data:/app/data
+      - ../logs:/app/logs
       - uv-cache:/root/.cache/uv   
 
     networks:
@@ -27,7 +27,7 @@ services:
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      
+
     environment:
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_POLL_INTERVAL=300
