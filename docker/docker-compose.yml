@@ -19,6 +19,7 @@ services:
     container_name: watchtower
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /home/floshv1/.docker/config.json:/config.json
     environment:
       - TZ=Europe/Paris
       - WATCHTOWER_CLEANUP=true
