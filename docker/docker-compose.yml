@@ -1,0 +1,53 @@
+services:
+  bot:
+    image: ghcr.io/${GITHUB_REPOSITORY:-floshy-bot}:latest
+    container_name: floshy-bot
+    restart: unless-stopped
+    
+    env_file:
+      - .env
+    
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - uv-cache:/root/.cache/uv   
+
+    networks:
+      - bot-network
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=300
+      - WATCHTOWER_NOTIFICATION_URL=${WATCHTOWER_NOTIFICATION_URL:-}
+
+    command: --interval 300 floshy-bot
+
+    networks:
+      - bot-network
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  bot-network:
+    driver: bridge
+
+volumes:
+  uv-cache:
+    driver: local
