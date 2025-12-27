@@ -35,6 +35,7 @@ services:
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_POLL_INTERVAL=300
       - WATCHTOWER_NOTIFICATION_URL=${WATCHTOWER_NOTIFICATION_URL:-}
+      - DOCKER_API_VERSION=1.44 
     command: --interval 300 floshy-bot
     networks:
       - bot-network
