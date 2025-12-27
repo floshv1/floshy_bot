@@ -1,9 +1,6 @@
 services:
   bot:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    image: ${DOCKER_IMAGE:-ghcr.io/floshv1/floshy-bot:latest}
+    image: ghcr.io/floshv1/floshy-bot:latest
     container_name: floshy-bot
     restart: unless-stopped
     env_file:
@@ -11,37 +8,20 @@ services:
     volumes:
       - ../data:/app/data
       - ../logs:/app/logs
-      - uv-cache:/root/.cache/uv   
+      - uv-cache:/root/.cache/uv
     networks:
       - bot-network
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
 
   watchtower:
-    image: containrrr/watchtower:latest
+    image: containrrr/watchtower
     container_name: watchtower
-    restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    env_file:
-      - ../.env
-    environment:
-      - TZ=Europe/Paris
-      - WATCHTOWER_CLEANUP=true
-      - WATCHTOWER_POLL_INTERVAL=300
-      - WATCHTOWER_NOTIFICATION_URL=${WATCHTOWER_NOTIFICATION_URL:-}
-      - DOCKER_API_VERSION=1.44
-    command: --interval 300 floshy-bot
-    networks:
-      - bot-network
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+    command: --cleanup --label-enable --interval 300
+    restart: unless-stopped
+
 
 networks:
   bot-network:
