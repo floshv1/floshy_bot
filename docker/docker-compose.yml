@@ -35,7 +35,9 @@ services:
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_POLL_INTERVAL=300
       - WATCHTOWER_NOTIFICATION_URL=${WATCHTOWER_NOTIFICATION_URL:-}
-      - DOCKER_API_VERSION=1.44 
+      - DOCKER_API_VERSION=1.44
+      - REPO_USER=${REPO_USER}  # ✅ Username GitHub
+      - REPO_PASS=${REPO_PASS}  # ✅ Token GitHub
     command: --interval 300 floshy-bot
     networks:
       - bot-network
@@ -44,7 +46,7 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
+        
 networks:
   bot-network:
     driver: bridge
