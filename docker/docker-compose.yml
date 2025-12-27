@@ -6,18 +6,14 @@ services:
     image: ${DOCKER_IMAGE:-ghcr.io/floshv1/floshy-bot:latest}
     container_name: floshy-bot
     restart: unless-stopped
-    
     env_file:
       - ../.env
-    
     volumes:
       - ../data:/app/data
       - ../logs:/app/logs
       - uv-cache:/root/.cache/uv   
-
     networks:
       - bot-network
-    
     logging:
       driver: "json-file"
       options:
@@ -38,8 +34,6 @@ services:
       - WATCHTOWER_POLL_INTERVAL=300
       - WATCHTOWER_NOTIFICATION_URL=${WATCHTOWER_NOTIFICATION_URL:-}
       - DOCKER_API_VERSION=1.44
-      - REPO_USER=${REPO_USER}  # ✅ Username GitHub
-      - REPO_PASS=${REPO_PASS}  # ✅ Token GitHub
     command: --interval 300 floshy-bot
     networks:
       - bot-network
