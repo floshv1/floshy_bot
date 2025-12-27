@@ -1,6 +1,6 @@
 services:
   bot:
-    image: ghcr.io/${GITHUB_REPOSITORY:-floshy-bot}:latest
+    image: ${DOCKER_IMAGE:-ghcr.io/ton-username/floshy-bot:latest}
     container_name: floshy-bot
     restart: unless-stopped
     
