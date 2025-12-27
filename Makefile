@@ -1,7 +1,58 @@
-# Makefile
-.PHONY: install dev sync add add-dev update run test test-cov lint format clean clean-docker docker-build docker-build-no-cache docker-up docker-down docker-logs docker-restart docker-shell docker-build-prod docker-run-prod show-deps show-outdated venv-activate help
+# Makefile - Floshy Bot
+.PHONY: help install dev sync add add-dev update \
+        test test-cov lint format \
+        docker-build docker-build-no-cache docker-up docker-down docker-logs docker-restart docker-shell docker-status docker-pull \
+        docker-push docker-clean \
+        run stop logs shell \
+        clean clean-all \
+        show-deps show-outdated \
+        health watchtower-logs
 
-# Installation et gestion des dépendances avec UV
+COMPOSE_FILE := docker/docker-compose.yml
+DOCKER_COMPOSE := docker compose -f $(COMPOSE_FILE)
+
+# ============================================================================
+# DÉPENDANCES (UV)
+# ============================================================================
+
+help:
+	@echo "╔════════════════════════════════════════════════════════════════╗"
+	@echo "║           Floshy Bot - Makefile Commands                       ║"
+	@echo "╚════════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@echo "📦 DÉPENDANCES (UV):"
+	@echo "  make install          - Installer les dépendances"
+	@echo "  make dev              - Installer avec extras dev"
+	@echo "  make sync             - Sync avec uv.lock (frozen)"
+	@echo "  make add PKG=...      - Ajouter une dépendance"
+	@echo "  make add-dev PKG=...  - Ajouter une dépendance dev"
+	@echo "  make update           - Mettre à jour uv.lock"
+	@echo ""
+	@echo "🧪 TESTS & QUALITÉ:"
+	@echo "  make test             - Lancer les tests"
+	@echo "  make test-cov         - Tests avec couverture (HTML)"
+	@echo "  make lint             - Vérifier la qualité du code"
+	@echo "  make format           - Formatter le code"
+	@echo ""
+	@echo "🐳 DOCKER (Développement):"
+	@echo "  make docker-build     - Builder l'image Docker"
+	@echo "  make docker-up        - Lancer les conteneurs"
+	@echo "  make docker-down      - Arrêter les conteneurs"
+	@echo "  make docker-restart   - Redémarrer les conteneurs"
+	@echo "  make docker-logs      - Voir les logs du bot"
+	@echo "  make docker-shell     - Shell dans le conteneur bot"
+	@echo "  make docker-status    - État des conteneurs"
+	@echo ""
+	@echo "🚀 DÉPLOIEMENT:"
+	@echo "  make docker-pull      - Télécharger l'image du registry"
+	@echo "  make docker-push      - Pusher l'image au registry (need local build)"
+	@echo "  make watchtower-logs  - Logs de Watchtower"
+	@echo ""
+	@echo "🧹 NETTOYAGE:"
+	@echo "  make clean            - Nettoyer cache Python"
+	@echo "  make clean-docker     - Arrêter et nettoyer Docker"
+	@echo "  make clean-all        - Tout nettoyer"
+
 install:
 	uv sync
 
@@ -11,91 +62,133 @@ dev:
 sync:
 	uv sync --frozen
 
-# Ajouter une dépendance
 add:
-	@echo "Usage: make add PKG=package-name"
+	@if [ -z "$(PKG)" ]; then echo "Usage: make add PKG=package-name"; exit 1; fi
 	uv add $(PKG)
 
 add-dev:
-	@echo "Usage: make add-dev PKG=package-name"
+	@if [ -z "$(PKG)" ]; then echo "Usage: make add-dev PKG=package-name"; exit 1; fi
 	uv add --dev $(PKG)
 
-# Mise à jour
 update:
 	uv lock --upgrade
 
-# Lancement
-run: docker-up
-	docker compose exec -T bot uv run python -m src.main
+# ============================================================================
+# TESTS & QUALITÉ
+# ============================================================================
 
-# Tests et qualité de code
 test:
-	docker compose exec -T bot uv run pytest
+	$(DOCKER_COMPOSE) exec -T bot uv run pytest
 
 test-cov:
-	docker compose exec -T bot uv run pytest --cov=src --cov-report=html
+	$(DOCKER_COMPOSE) exec -T bot uv run pytest --cov=src --cov-report=html
+	@echo "📊 Rapport de couverture: htmlcov/index.html"
 
 lint:
-	docker compose exec -T bot uv run ruff check src/ tests/
-	docker compose exec -T bot uv run mypy src/
+	$(DOCKER_COMPOSE) exec -T bot uv run ruff check src/ tests/
+	$(DOCKER_COMPOSE) exec -T bot uv run mypy src/
 
 format:
-	docker compose exec -T bot uv run black src/ tests/
-	docker compose exec -T bot uv run ruff check --fix src/ tests/
+	$(DOCKER_COMPOSE) exec -T bot uv run black src/ tests/
+	$(DOCKER_COMPOSE) exec -T bot uv run ruff check --fix src/ tests/
 
-# Docker avec UV
+# ============================================================================
+# DOCKER - DÉVELOPPEMENT
+# ============================================================================
+
 docker-build:
-	docker compose build
+	$(DOCKER_COMPOSE) build
 
 docker-build-no-cache:
-	docker compose build --no-cache
+	$(DOCKER_COMPOSE) build --no-cache
 
 docker-up:
-	docker compose up -d
+	$(DOCKER_COMPOSE) up -d
+	@echo "✅ Conteneurs lancés!"
+	@make docker-status
 
 docker-down:
-	docker compose down
-
-docker-logs:
-	docker compose logs -f bot
+	$(DOCKER_COMPOSE) down
+	@echo "❌ Conteneurs arrêtés"
 
 docker-restart:
-	docker compose restart bot
+	$(DOCKER_COMPOSE) restart bot
+	@echo "🔄 Bot redémarré"
+
+docker-logs:
+	$(DOCKER_COMPOSE) logs -f bot
 
 docker-shell:
-	docker compose exec bot /bin/bash
+	$(DOCKER_COMPOSE) exec bot /bin/bash
 
-# Docker Production
-docker-build-prod:
-	docker build -f Dockerfile.production -t discord-bot:latest .
+docker-status:
+	@echo "📊 État des conteneurs:"
+	$(DOCKER_COMPOSE) ps
 
-docker-run-prod:
-	docker run -d \
-		--name discord-bot \
-		--env-file .env \
-		-v $(PWD)/data:/app/data \
-		--restart unless-stopped \
-		discord-bot:latest
+docker-clean:
+	$(DOCKER_COMPOSE) down -v
+	@echo "🧹 Volumes supprimés"
 
-# Nettoyage
-clean:
-	find . -type d -name "__pycache__" -exec rm -rf {} +
-	find . -type f -name "*.pyc" -delete
-	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov/
+# ============================================================================
+# DÉPLOIEMENT & REGISTRY
+# ============================================================================
 
-clean-docker:
-	docker-compose down -v
-	docker system prune -f
+docker-pull:
+	docker pull ghcr.io/${GITHUB_REPOSITORY:-floshy-bot}:latest
+	@echo "✅ Image téléchargée"
 
-# Utilitaires
+docker-push:
+	@echo "⚠️  Note: Cette commande requiert que l'image soit builée localement"
+	@echo "Sur GitHub Actions, c'est fait automatiquement au push sur 'main'"
+	docker tag floshy-bot:latest ghcr.io/${GITHUB_REPOSITORY:-floshy-bot}:latest
+	docker push ghcr.io/${GITHUB_REPOSITORY:-floshy-bot}:latest
+
+watchtower-logs:
+	$(DOCKER_COMPOSE) logs -f watchtower
+
+health:
+	@echo "🏥 Vérification de la santé du bot..."
+	$(DOCKER_COMPOSE) exec -T bot python -c "import discord; print('✅ Discord.py OK')"
+
+# ============================================================================
+# UTILITAIRES
+# ============================================================================
+
+run: docker-up health
+	@echo "🤖 Bot en cours d'exécution!"
+
+stop:
+	make docker-down
+
+logs:
+	make docker-logs
+
+shell:
+	make docker-shell
+
 show-deps:
-	docker-compose exec -T bot uv pip list
+	$(DOCKER_COMPOSE) exec -T bot uv pip list
 
 show-outdated:
-	docker-compose exec -T bot uv pip list --outdated
+	$(DOCKER_COMPOSE) exec -T bot uv pip list --outdated
 
-venv-activate:
-	@echo "Run: source .venv/bin/activate"
+# ============================================================================
+# NETTOYAGE
+# ============================================================================
+
+clean:
+	@echo "🧹 Nettoyage des fichiers Python..."
+	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+	find . -type f -name "*.pyc" -delete
+	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov/ dist/ build/ *.egg-info
+
+clean-docker:
+	@echo "🧹 Nettoyage Docker..."
+	$(DOCKER_COMPOSE) down -v
+	docker system prune -f --volumes
+
+clean-all: clean clean-docker
+	@echo "✅ Tout nettoyé!"
 
 
 
