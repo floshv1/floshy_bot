@@ -1,5 +1,8 @@
 services:
   bot:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     image: ${DOCKER_IMAGE:-ghcr.io/floshv1/floshy-bot:latest}
     container_name: floshy-bot
     restart: unless-stopped
