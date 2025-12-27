@@ -103,6 +103,7 @@ docker-build-no-cache:
 	$(DOCKER_COMPOSE) build --no-cache
 
 docker-up:
+	@docker container rm -f floshy-bot 2>/dev/null || true
 	$(DOCKER_COMPOSE) up -d
 	@echo "✅ Conteneurs lancés!"
 	@make docker-status
