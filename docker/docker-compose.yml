@@ -14,30 +14,6 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
-  watchtower:
-    image: containrrr/watchtower:latest
-    container_name: watchtower
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /home/floshv1/.docker/config.json:/config.json
-    environment:
-      - TZ=Europe/Paris
-      - WATCHTOWER_CLEANUP=true
-      - WATCHTOWER_POLL_INTERVAL=300
-      - WATCHTOWER_NOTIFICATION_URL=${WATCHTOWER_NOTIFICATION_URL:-}
-      - DOCKER_API_VERSION=1.44
-
-    command: --cleanup --label-enable --interval 300
-    restart: unless-stopped
-    networks:
-      - bot-network
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-
 networks:
   bot-network:
     driver: bridge
