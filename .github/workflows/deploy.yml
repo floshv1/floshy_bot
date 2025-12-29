@@ -3,7 +3,6 @@ name: Deploy to GitHub Registry
 on:
   push:
     branches:
-      - main
       - master
     paths:
       - 'src/**'
