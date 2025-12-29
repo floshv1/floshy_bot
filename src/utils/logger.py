@@ -2,8 +2,7 @@
 import sys
 from pathlib import Path
 from loguru import logger
-from datetime import datetime
-from zoneinfo import ZoneInfo
+
 
 def setup_logger(log_level: str = "INFO"):
     """Configure Loguru pour le bot"""
@@ -12,14 +11,8 @@ def setup_logger(log_level: str = "INFO"):
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
     
-    # Définir le fuseau horaire
-    timezone = ZoneInfo("Europe/Paris")
-    
     # Retirer le handler par défaut
     logger.remove()
-    
-    # Configuration pour patcher l'heure avec le timezone
-    logger.configure(patcher=lambda record: record.update(time=datetime.now(timezone)))
     
     # Handler pour la console avec couleurs
     logger.add(
@@ -34,9 +27,9 @@ def setup_logger(log_level: str = "INFO"):
         log_dir / "bot.log",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
         level="DEBUG",
-        rotation="10 MB",
-        retention="1 week",
-        compression="zip",
+        rotation="10 MB",  # Rotation à 10MB
+        retention="1 week",  # Garder 1 semaine
+        compression="zip",  # Compresser les anciens logs
         encoding="utf-8",
     )
     
@@ -49,9 +42,9 @@ def setup_logger(log_level: str = "INFO"):
         retention="2 weeks",
         compression="zip",
         encoding="utf-8",
-        backtrace=True,
-        diagnose=True,
+        backtrace=True,  # Trace complète des erreurs
+        diagnose=True,   # Informations de diagnostic
     )
     
-    logger.info("Logger configuré avec succès (Timezone: Europe/Paris)")
+    logger.info("Logger configuré avec succès")
     return logger
