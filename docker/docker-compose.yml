@@ -1,6 +1,6 @@
 services:
   bot:
-    image: ghcr.io/floshv1/floshy-bot:latest
+    image: ghcr.io/floshv1/floshy_bot:latest
     container_name: floshy-bot
     restart: unless-stopped
     env_file:
