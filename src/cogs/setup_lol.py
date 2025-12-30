@@ -1,13 +1,14 @@
 # src/cogs/setup_lol.py - Version complète avec LeagueService
 
 import os
+
 import discord
 import yaml
 from discord.ext import commands
 from loguru import logger
 
-from src.lol.exceptions import InvalidApiKey, PlayerNotFound, RateLimited
 from src.lol.client import RiotApiClient
+from src.lol.exceptions import InvalidApiKey, PlayerNotFound, RateLimited
 from src.lol.service import LeagueService
 
 
@@ -16,7 +17,7 @@ class SetupLol(commands.Cog):
         self.bot = bot
         self.league_service = league_service
         self.db_path = "./data/users.yml"
-        
+
         # S'assurer que le dossier data existe
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         logger.info(f"Cog SetupLol chargé (DB: {self.db_path})")
@@ -240,7 +241,7 @@ class SetupLol(commands.Cog):
         Usage: !lol_stats [@mention]
         Si aucun membre n'est mentionné, affiche vos propres stats.
         """
-        logger.info(f"Requête lol_stats par {ctx.author} pour {target}")
+        logger.info(f"Requête lol_stats par {ctx.author} pour {member}")
         # Si aucun membre mentionné, utiliser l'auteur
         target = member or ctx.author
 
