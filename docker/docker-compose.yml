@@ -3,6 +3,10 @@ services:
     image: ghcr.io/floshv1/floshy_bot:latest
     container_name: floshy_bot
     restart: unless-stopped
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - LOLAPI=${LOLAPI}
+      - LOG_LEVEL=INFO
     env_file:
       - ../.env
     volumes:
