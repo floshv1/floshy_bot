@@ -30,10 +30,7 @@ def setup_logger(log_level: str = "INFO"):
     # Handler pour le fichier général
     logger.add(
         log_dir / "bot.log",
-        format=(
-            "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} |"
-            " {name}:{function}:{line} - {message}"
-        ),
+        format=("{time:YYYY-MM-DD HH:mm:ss} | {level: <8} |" " {name}:{function}:{line} - {message}"),
         level="DEBUG",
         rotation="10 MB",  # Rotation à 10MB
         retention="1 week",  # Garder 1 semaine
@@ -44,10 +41,7 @@ def setup_logger(log_level: str = "INFO"):
     # Handler pour les erreurs uniquement
     logger.add(
         log_dir / "errors.log",
-        format=(
-            "{time:YYYY-MM-DD HH:mm:ss} | "
-            "{level: <8} | {name}:{function}:{line} - {message}"
-        ),
+        format=("{time:YYYY-MM-DD HH:mm:ss} | " "{level: <8} | {name}:{function}:{line} - {message}"),
         level="ERROR",
         rotation="5 MB",
         retention="2 weeks",

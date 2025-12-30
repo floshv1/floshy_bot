@@ -83,10 +83,7 @@ class DiscordBot(commands.Bot):
 
     async def on_command(self, ctx):
         """Log quand une commande est utilisée"""
-        logger.debug(
-            f"Commande '{ctx.command}' utilisée par {ctx.author} "
-            f"dans #{ctx.channel} ({ctx.guild})"
-        )
+        logger.debug(f"Commande '{ctx.command}' utilisée par {ctx.author} " f"dans #{ctx.channel} ({ctx.guild})")
 
     async def on_command_error(self, ctx, error):
         """Gestion globale des erreurs de commandes"""
@@ -95,9 +92,7 @@ class DiscordBot(commands.Bot):
             return
 
         if isinstance(error, commands.MissingPermissions):
-            logger.warning(
-                f"{ctx.author} a tenté d'utiliser {ctx.command} " f"sans permissions"
-            )
+            logger.warning(f"{ctx.author} a tenté d'utiliser {ctx.command} " f"sans permissions")
             await ctx.reply("❌ Tu n'as pas les permissions nécessaires !")
             return
 

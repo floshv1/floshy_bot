@@ -20,6 +20,7 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.0.0",
     "ruff>=0.14.10",
+    "types-pyyaml>=6.0.12.20250915",
 ]
 
 [project.scripts]
@@ -58,15 +59,19 @@ ignore_missing_imports = true
 module = "loguru.*"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "yaml"
+ignore_missing_imports = true
+
 # Configuration Black
 [tool.black]
-line-length = 88
+line-length = 150
 target-version = ['py312']
 include = '\.pyi?$'
 
 # Configuration Ruff
 [tool.ruff]
-line-length = 88
+line-length = 150
 target-version = "py312"
 
 [tool.ruff.lint]

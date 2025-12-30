@@ -13,50 +13,73 @@ def client_mock():
 
 
 @pytest.fixture
-def league_service(client_mock):
+def service(client_mock):
     return LeagueService(client_mock)
 
 
-def test_get_puuid_success(league_service, client_mock):
-    # Arrange
-    client_mock.get_puuid.return_value = "PUUID_TEST"
+# --- Tests de succès ---
 
-    # Act
-    result = league_service.get_puuid("floshv1", "LDV")
 
-    # Assert
-    assert result == "PUUID_TEST"
-    client_mock.get_puuid.assert_called_once_with("floshv1", "LDV")
+def test_get_match_history_calls_client(service, client_mock):
+    client_mock.get_puuid.return_value = "PUUID_123"
+    client_mock.get_match_ids.return_value = ["M1", "M2"]
+
+    history = service.get_match_history("Pseudo", "TAG", count=2)
+
+    assert history == ["M1", "M2"]
+    client_mock.get_puuid.assert_called_once_with("Pseudo", "TAG")
+
+
+# --- Tests d'erreurs (Fix des échecs MagicMock) ---
+
+
+def test_get_match_history_error(service, client_mock):
+    """Couvre les lignes 39-40 : ApiError dans l'historique"""
+    client_mock.get_puuid.return_value = "PUUID_123"
+
+    # Utilisation d'un objet response mocké avec status_code
+    mock_res = MagicMock(status_code=403)
+    client_mock.get_match_ids.side_effect = ApiError(response=mock_res)
+
+    with pytest.raises(InvalidApiKey):
+        service.get_match_history("Pseudo", "TAG")
+
+
+def test_get_match_details_success(service, client_mock):
+    """Couvre les lignes 43-44 : Succès de get_match_details"""
+    client_mock.get_match_info.return_value = {"info": "ok"}
+    res = service.get_match_details("MATCH_ID")
+    assert res == {"info": "ok"}
+
+
+def test_get_match_details_error(service, client_mock):
+    """Couvre les lignes 46-47 : Erreur dans get_match_details"""
+    mock_res = MagicMock(status_code=404)
+    client_mock.get_match_info.side_effect = ApiError(response=mock_res)
+
+    with pytest.raises(PlayerNotFound):
+        service.get_match_details("BAD_ID")
 
 
 @pytest.mark.parametrize(
-    "status_code,expected_exception",
-    [
-        (403, InvalidApiKey),
-        (404, PlayerNotFound),
-        (429, RateLimited),
-    ],
+    "status_code, expected_exception",
+    [(403, InvalidApiKey), (404, PlayerNotFound), (429, RateLimited)],
 )
-def test_get_puuid_errors(league_service, client_mock, status_code, expected_exception):
-    # Arrange
-    client_mock.get_puuid.side_effect = ApiError(
-        response=MagicMock(status_code=status_code)
-    )
+def test_handle_api_errors(service, client_mock, status_code, expected_exception):
+    """Vérifie le mapping de _handle_api_error (lignes 53-58)"""
+    mock_response = MagicMock(status_code=status_code)
+    client_mock.make_profile.side_effect = ApiError(response=mock_response)
 
-    # Act & Assert
     with pytest.raises(expected_exception):
-        league_service.get_puuid("floshv1", "LDV")
+        service.make_profile("any-puuid")
 
 
-def test_get_puuid_unknown_error(league_service, client_mock):
-    """Test qu'une erreur API inconnue est bien propagée"""
-    # Arrange - Code d'erreur non géré (ex: 500, 503, etc.)
-    api_error = ApiError(response=MagicMock(status_code=500))
+def test_unknown_error_propagation(service, client_mock):
+    """Couvre la ligne 60 : Propagation d'erreur inconnue"""
+    mock_response = MagicMock(status_code=500)
+    api_error = ApiError(response=mock_response)
     client_mock.get_puuid.side_effect = api_error
 
-    # Act & Assert - L'erreur ApiError originale doit être propagée
     with pytest.raises(ApiError) as exc_info:
-        league_service.get_puuid("floshv1", "LDV")
-
-    # Vérifier que c'est bien la même erreur
+        service.get_puuid("Pseudo", "TAG")
     assert exc_info.value == api_error

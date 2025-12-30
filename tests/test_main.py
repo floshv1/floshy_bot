@@ -31,9 +31,7 @@ class TestDiscordBot:
     async def test_setup_hook_success(self, bot):
         """Test setup_hook avec succès"""
         with patch.object(bot, "load_cogs", new_callable=AsyncMock) as mock_load:
-            with patch.object(
-                bot.tree, "sync", new_callable=AsyncMock, return_value=[1, 2, 3]
-            ):
+            with patch.object(bot.tree, "sync", new_callable=AsyncMock, return_value=[1, 2, 3]):
                 await bot.setup_hook()
 
                 mock_load.assert_called_once()
@@ -128,9 +126,7 @@ class TestDiscordBot:
                         new_callable=PropertyMock,
                         return_value=[mock_guild1, mock_guild2],
                     ):
-                        with patch.object(
-                            bot, "change_presence", new_callable=AsyncMock
-                        ) as mock_presence:
+                        with patch.object(bot, "change_presence", new_callable=AsyncMock) as mock_presence:
                             await bot.on_ready()
 
                             # Vérifie que change_presence a été appelé correctement
@@ -138,9 +134,7 @@ class TestDiscordBot:
                             args, kwargs = mock_presence.call_args
                             assert kwargs["status"] == discord.Status.online
                             assert kwargs["activity"].name == "Charbonne"
-                            assert (
-                                kwargs["activity"].type == discord.ActivityType.playing
-                            )
+                            assert kwargs["activity"].type == discord.ActivityType.playing
 
                             # Vérifie que les logs ont été appelés
                             assert mock_logger.info.called
@@ -254,10 +248,7 @@ class TestMainFunction:
                         await main()
 
                         # Vérifie que les logs du finally ont été appelés
-                        assert any(
-                            "Fermeture" in str(call)
-                            for call in mock_logger.info.call_args_list
-                        )
+                        assert any("Fermeture" in str(call) for call in mock_logger.info.call_args_list)
                         mock_logger.success.assert_called()
 
     @pytest.mark.asyncio
@@ -278,15 +269,10 @@ class TestMainFunction:
 
                         # Vérifie le log warning
                         mock_logger.warning.assert_called_once()
-                        assert "Interruption clavier" in str(
-                            mock_logger.warning.call_args
-                        )
+                        assert "Interruption clavier" in str(mock_logger.warning.call_args)
 
                         # Vérifie que les logs du finally ont été appelés
-                        assert any(
-                            "Fermeture" in str(call)
-                            for call in mock_logger.info.call_args_list
-                        )
+                        assert any("Fermeture" in str(call) for call in mock_logger.info.call_args_list)
                         mock_logger.success.assert_called()
 
     @pytest.mark.asyncio
@@ -313,10 +299,7 @@ class TestMainFunction:
                         assert "Token invalide" in str(mock_logger.critical.call_args)
 
                         # Vérifie que les logs du finally ont été appelés
-                        assert any(
-                            "Fermeture" in str(call)
-                            for call in mock_logger.info.call_args_list
-                        )
+                        assert any("Fermeture" in str(call) for call in mock_logger.info.call_args_list)
                         mock_logger.success.assert_called()
 
     @pytest.mark.asyncio
@@ -344,10 +327,7 @@ class TestMainFunction:
                         assert "Stacktrace" in str(mock_logger.exception.call_args)
 
                         # Vérifie que les logs du finally ont été appelés
-                        assert any(
-                            "Fermeture" in str(call)
-                            for call in mock_logger.info.call_args_list
-                        )
+                        assert any("Fermeture" in str(call) for call in mock_logger.info.call_args_list)
                         mock_logger.success.assert_called()
 
     @pytest.mark.asyncio
@@ -362,10 +342,7 @@ class TestMainFunction:
                         await main()
 
                         # Vérifie que "Démarrage du bot..." a été loggué
-                        assert any(
-                            "Démarrage" in str(call)
-                            for call in mock_logger.info.call_args_list
-                        )
+                        assert any("Démarrage" in str(call) for call in mock_logger.info.call_args_list)
 
     @pytest.mark.asyncio
     async def test_main_missing_token_critical_log(self):
@@ -379,6 +356,4 @@ class TestMainFunction:
                     assert exc_info.value.code == 1
                     # Vérifie le log critical
                     mock_logger.critical.assert_called_once()
-                    assert "DISCORD_TOKEN non trouvé" in str(
-                        mock_logger.critical.call_args
-                    )
+                    assert "DISCORD_TOKEN non trouvé" in str(mock_logger.critical.call_args)

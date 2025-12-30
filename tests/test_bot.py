@@ -40,9 +40,7 @@ class TestBotSetupHook:
         bot = DiscordBot()
 
         with patch.object(bot, "load_cogs", new_callable=AsyncMock) as mock_load:
-            with patch.object(
-                bot.tree, "sync", new_callable=AsyncMock, return_value=[]
-            ):
+            with patch.object(bot.tree, "sync", new_callable=AsyncMock, return_value=[]):
                 await bot.setup_hook()
                 mock_load.assert_called_once()
 
@@ -52,9 +50,7 @@ class TestBotSetupHook:
         bot = DiscordBot()
 
         with patch.object(bot, "load_cogs", new_callable=AsyncMock):
-            with patch.object(
-                bot.tree, "sync", new_callable=AsyncMock, return_value=[]
-            ) as mock_sync:
+            with patch.object(bot.tree, "sync", new_callable=AsyncMock, return_value=[]) as mock_sync:
                 await bot.setup_hook()
                 mock_sync.assert_called_once()
 
@@ -86,9 +82,7 @@ class TestBotLoadCogs:
             mock_cogs_dir = MagicMock()
             mock_cogs_dir.glob.return_value = []
             mock_path.return_value.parent = MagicMock()
-            mock_path.return_value.parent.__truediv__ = MagicMock(
-                return_value=mock_cogs_dir
-            )
+            mock_path.return_value.parent.__truediv__ = MagicMock(return_value=mock_cogs_dir)
 
             # Ne devrait pas lever d'exception
             await bot.load_cogs()
@@ -107,13 +101,9 @@ class TestBotLoadCogs:
             mock_cogs_dir.glob.return_value = [mock_init_file]
 
             mock_path.return_value.parent = MagicMock()
-            mock_path.return_value.parent.__truediv__ = MagicMock(
-                return_value=mock_cogs_dir
-            )
+            mock_path.return_value.parent.__truediv__ = MagicMock(return_value=mock_cogs_dir)
 
-            with patch.object(
-                bot, "load_extension", new_callable=AsyncMock
-            ) as mock_load_ext:
+            with patch.object(bot, "load_extension", new_callable=AsyncMock) as mock_load_ext:
                 await bot.load_cogs()
                 # load_extension ne devrait pas être appelé pour __init__.py
                 mock_load_ext.assert_not_called()
