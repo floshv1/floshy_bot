@@ -1,8 +1,10 @@
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from riotwatcher import ApiError
 
 from src.lol.client import RiotApiClient
+
 
 class TestRiotApiClient(unittest.TestCase):
 
@@ -13,9 +15,7 @@ class TestRiotApiClient(unittest.TestCase):
         mock_riot = mock_riot_cls.return_value
         mock_lol = mock_lol_cls.return_value
 
-        mock_riot.account.by_riot_id.return_value = {
-            "puuid": "PUUID_TEST"
-        }
+        mock_riot.account.by_riot_id.return_value = {"puuid": "PUUID_TEST"}
 
         mock_lol.summoner.by_puuid.return_value = {}
 
@@ -26,12 +26,8 @@ class TestRiotApiClient(unittest.TestCase):
 
         # Assert
         self.assertEqual(result, "PUUID_TEST")
-        mock_riot.account.by_riot_id.assert_called_once_with(
-            "europe", "floshv1", "LDV"
-        )
-        mock_lol.summoner.by_puuid.assert_called_once_with(
-            "euw1", "PUUID_TEST"
-        )
+        mock_riot.account.by_riot_id.assert_called_once_with("europe", "floshv1", "LDV")
+        mock_lol.summoner.by_puuid.assert_called_once_with("euw1", "PUUID_TEST")
 
     @patch("src.lol.client.RiotWatcher")
     def test_get_puuid_api_error_propagated(self, mock_riot_cls):
@@ -45,5 +41,3 @@ class TestRiotApiClient(unittest.TestCase):
 
         with self.assertRaises(ApiError):
             client.get_puuid("floshv1", "LDV")
-
-

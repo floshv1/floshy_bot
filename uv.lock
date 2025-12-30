@@ -387,7 +387,7 @@ wheels = [
 [[package]]
 name = "floshy-bot"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "discord-py" },
     { name = "loguru" },

@@ -24,3 +24,80 @@ dev = [
 
 [project.scripts]
 bot = "src.main:main"
+
+# Configuration UV
+[tool.uv]
+package = true
+
+# Build system
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Configuration Hatchling - AJOUTEZ CETTE SECTION
+[tool.hatch.build.targets.wheel]
+packages = ["src"]  # ← Indique où se trouve votre code
+
+# Configuration MyPy
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+pretty = true
+
+[[tool.mypy.overrides]]
+module = "riotwatcher.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "discord.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "loguru.*"
+ignore_missing_imports = true
+
+# Configuration Black
+[tool.black]
+line-length = 88
+target-version = ['py312']
+include = '\.pyi?$'
+
+# Configuration Ruff
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
+
+# Configuration Pytest
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--cov=src",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "-v",
+    "--asyncio-mode=auto"
+]
+asyncio_mode = "auto"
+
+# Configuration Coverage
+[tool.coverage.run]
+source = ["src"]
+omit = ["tests/*", "**/__pycache__/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if __name__ == .__main__.:",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]

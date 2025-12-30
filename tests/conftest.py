@@ -1,9 +1,9 @@
 # tests/conftest.py
 """Configuration pytest et fixtures communes pour tous les tests"""
-import pytest
 import os
-from pathlib import Path
 from unittest.mock import MagicMock
+
+import pytest
 
 
 @pytest.fixture
@@ -19,6 +19,7 @@ def temp_env():
 def mock_discord_bot():
     """Fixture pour créer un bot Discord mocké"""
     from src.main import DiscordBot
+
     bot = DiscordBot()
     return bot
 
