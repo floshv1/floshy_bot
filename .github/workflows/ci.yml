@@ -27,20 +27,20 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -e .[dev]
 
       - name: Run linter (Ruff)
-        run: ruff check src tests
+        run: python -m ruff check src tests
 
       - name: Format check (Black)
-        run: black --check src tests
+        run: python -m black --check src tests
 
       - name: Type check (Mypy)
-        run: mypy src
+        run: python -m mypy src
 
       - name: Run tests (pytest)
-        run: pytest tests --maxfail=1 --disable-warnings -v --cov=src
+        run: python -m pytest tests --maxfail=1 --disable-warnings -v --cov=src
 
   docker-build:
     runs-on: ubuntu-latest
@@ -62,4 +62,3 @@ jobs:
             -e DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }} \
             -e LOLAPI=${{ secrets.LOLAPI }} \
             floshy_bot_ci python -c "print('Container OK!')"
-
