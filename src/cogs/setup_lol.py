@@ -1,24 +1,29 @@
 # src/cogs/setup_lol.py - Version complète avec LeagueService
 
 import os
-
 import discord
 import yaml
 from discord.ext import commands
+from loguru import logger
 
 from src.lol.exceptions import InvalidApiKey, PlayerNotFound, RateLimited
+from src.lol.client import RiotApiClient
+from src.lol.service import LeagueService
 
 
 class SetupLol(commands.Cog):
-    def __init__(self, bot, league_service):
+    def __init__(self, bot: commands.Bot, league_service: LeagueService):
         self.bot = bot
         self.league_service = league_service
         self.db_path = "./data/users.yml"
+        
         # S'assurer que le dossier data existe
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        logger.info(f"Cog SetupLol chargé (DB: {self.db_path})")
 
     def _save_user(self, discord_id, puuid, pseudo, tag):
         """Enregistre ou met à jour un utilisateur dans le fichier YAML."""
+        logger.debug(f"Tentative de sauvegarde YAML pour {discord_id} ({pseudo}#{tag})")
         data = {}
         if os.path.exists(self.db_path):
             with open(self.db_path, "r", encoding="utf-8") as f:
@@ -32,8 +37,12 @@ class SetupLol(commands.Cog):
         with open(self.db_path, "w", encoding="utf-8") as f:
             yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
 
+        logger.success(f"Données enregistrées pour {pseudo}#{tag}")
+
     def _load_users(self):
         """Charge tous les utilisateurs depuis le fichier YAML."""
+        logger.debug(f"Tentative de chargement des utilisateurs depuis {self.db_path}")
+
         if not os.path.exists(self.db_path):
             return {}
 
@@ -46,6 +55,7 @@ class SetupLol(commands.Cog):
         Lie votre compte Discord à votre compte Riot.
         Usage: !link_lol Pseudo#TAG
         """
+        logger.info(f"Requête link_lol par {ctx.author}: {name_with_tag}")
         if "#" not in name_with_tag:
             return await ctx.send("❌ Format invalide. Utilisez : `Pseudo#TAG`")
 
@@ -66,6 +76,7 @@ class SetupLol(commands.Cog):
                 )
                 embed.add_field(name="PUUID", value=f"`{puuid[:15]}...`", inline=False)
                 await ctx.send(embed=embed)
+                logger.success(f"Compte lié: {pseudo}#{tag} pour {ctx.author}")
 
             except PlayerNotFound:
                 await ctx.send(f"❌ Impossible de trouver le joueur **{pseudo}#{tag}**.")
@@ -86,6 +97,7 @@ class SetupLol(commands.Cog):
         Affiche un tableau avec tous les joueurs qui ont lié leur compte.
         Usage: !lol_leaderboard
         """
+        logger.info(f"Génération leaderboard par {ctx.author}")
         # Charger les utilisateurs
         users = self._load_users()
 
@@ -123,12 +135,15 @@ class SetupLol(commands.Cog):
 
                     except (PlayerNotFound, RateLimited, InvalidApiKey):
                         # Skip ce joueur en cas d'erreur
+                        logger.warning(f"Impossible de récupérer les stats pour {user_data['pseudo']}#{user_data['tag']}")
                         continue
                     except Exception:
                         # Skip ce joueur en cas d'erreur
+                        logger.exception(f"Erreur inconnue pour {user_data['pseudo']}#{user_data['tag']}")
                         continue
 
                 if not players:
+                    logger.warning("Aucun joueur avec des stats valides pour le leaderboard.")
                     return await ctx.send("❌ Impossible de récupérer les stats des joueurs.")
 
                 # Trier par rang (Solo/Duo)
@@ -205,6 +220,7 @@ class SetupLol(commands.Cog):
                 )
 
                 await ctx.send(embed=embed)
+                logger.success(f"Leaderboard envoyé à {ctx.author}")
 
             except RateLimited:
                 await ctx.send("⏳ Trop de requêtes à l'API Riot. Réessayez dans une minute.")
@@ -224,6 +240,7 @@ class SetupLol(commands.Cog):
         Usage: !lol_stats [@mention]
         Si aucun membre n'est mentionné, affiche vos propres stats.
         """
+        logger.info(f"Requête lol_stats par {ctx.author} pour {target}")
         # Si aucun membre mentionné, utiliser l'auteur
         target = member or ctx.author
 
@@ -383,6 +400,14 @@ class SetupLol(commands.Cog):
         return tier_emojis.get(tier.upper(), "❓")
 
 
-async def setup_cog(bot, league_service):
-    """Fonction pour charger le cog"""
-    await bot.add_cog(SetupLol(bot, league_service))
+async def setup(bot):
+    """Point d'entrée crucial pour le chargement du Cog"""
+    api_key = os.getenv("RIOT_API_KEY")
+    if not api_key:
+        logger.critical("RIOT_API_KEY manquante dans le .env !")
+        return
+
+    client = RiotApiClient(api_key)
+    service = LeagueService(client)
+    await bot.add_cog(SetupLol(bot, service))
+    logger.success("Extension setup_lol chargée avec setup()")
