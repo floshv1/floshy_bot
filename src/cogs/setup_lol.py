@@ -403,10 +403,11 @@ class SetupLol(commands.Cog):
 
 async def setup(bot):
     """Point d'entrée crucial pour le chargement du Cog"""
-    api_key = os.getenv("RIOT_API_KEY")
+    api_key = os.getenv("LOLAPI")
     if not api_key:
-        logger.critical("RIOT_API_KEY manquante dans le .env !")
+        logger.critical("LOLAPI manquante dans les variables d’environnement")
         return
+
 
     client = RiotApiClient(api_key)
     service = LeagueService(client)
