@@ -413,29 +413,26 @@ class TestLeaderboardEdgeCases:
     @pytest.mark.asyncio
     async def test_create_embed_with_error_user(self, cog):
         """Test quand un utilisateur fait planter l'API"""
-        # 1 valide, 1 erreur
         cog._save_user(1, "p1", "Valid", "EUW")
         cog._save_user(2, "p2", "Error", "EUW")
 
         mock_guild = MagicMock()
         mock_guild.get_member.return_value = MagicMock(display_name="User")
 
-        # Le premier passe, le second lève une erreur
         cog.league_service.make_profile.side_effect = [
             {
                 "name": "Valid",
                 "tag": "EUW",
                 "level": 30,
-                "rankedStats": {"soloq": {"tier": "GOLD", "rank": "I", "lp": 10, "wins": 10, "losses": 10, "winrate": 50.0}, "flex": None},
+                "rankedStats": {"soloq": {"tier": "GOLD", "rank": "I", "lp": 10, "winrate": 50.0}, "flex": None},
             },
             Exception("API Error"),
         ]
 
         embed = await cog._create_leaderboard_embed(mock_guild)
 
-        # CORRECTION : Le nouveau format affiche "**Valid**" (nom gras sans tag)
-        assert "**Valid**" in embed.description
-        # On vérifie que le joueur en erreur n'est pas là
+        # CORRECTION : On cherche juste le nom sans les étoiles de gras
+        assert "Valid" in embed.description
         assert "Error" not in embed.description
 
 
@@ -683,72 +680,65 @@ class TestCoverageGaps:
     # 4. Test formatage : Rang Apex / Master+ (Ligne 338)
     @pytest.mark.asyncio
     async def test_create_embed_apex_tier(self, cog):
-        """Vérifie l'affichage compact pour Master (M), GM, Chall."""
+        """Vérifie l'affichage du rang Master dans le tableau."""
         cog._save_user(123, "puuid", "Pro", "Tag")
-
         mock_guild = MagicMock()
         mock_guild.get_member.return_value = MagicMock(display_name="User")
 
-        # Simulation d'un joueur Master
         cog.league_service.make_profile.return_value = {
             "name": "Pro",
             "tag": "Tag",
             "level": 999,
-            "rankedStats": {"soloq": {"tier": "MASTER", "rank": "I", "lp": 800, "wins": 100, "losses": 50, "winrate": 66.6}, "flex": None},
+            "rankedStats": {"soloq": {"tier": "MASTER", "rank": "I", "lp": 800, "winrate": 66.6}, "flex": None},
         }
 
         embed = await cog._create_leaderboard_embed(mock_guild)
 
-        # VERIFICATION FORMAT COMPACT :
-        # On cherche "M" (Master raccourci) et "800LP" (collé)
-        assert "M " in embed.description
-        assert "800LP" in embed.description
+        # CORRECTION : On cherche "Master" et "800 LP"
+        assert "Master" in embed.description
+        assert "800 LP" in embed.description
 
     @pytest.mark.asyncio
     async def test_create_embed_specific_short_tiers(self, cog):
-        """Couvre les abréviations spécifiques : PLAT, EMER, DIAM."""
-        # On enregistre 3 utilisateurs
-        cog._save_user(1, "p1", "PlatUser", "TAG")
-        cog._save_user(2, "p2", "EmerUser", "TAG")
-        cog._save_user(3, "p3", "DiamUser", "TAG")
+        """Vérifie l'affichage des rangs complets (Platinum, Emerald, Diamond)."""
+        cog._save_user(1, "p1", "Plat", "TAG")
+        cog._save_user(2, "p2", "Emer", "TAG")
+        cog._save_user(3, "p3", "Diam", "TAG")
 
         mock_guild = MagicMock()
-        # On simule que les membres sont présents sur le discord
         mock_guild.get_member.return_value = MagicMock(display_name="User")
 
-        # On simule les réponses de l'API Riot pour chaque utilisateur
         cog.league_service.make_profile.side_effect = [
             {
                 "name": "P1",
-                "tag": "Tag",
+                "tag": "T",
                 "level": 100,
-                "rankedStats": {"soloq": {"tier": "PLATINUM", "rank": "IV", "lp": 10, "wins": 0, "losses": 0, "winrate": 50}, "flex": None},
+                "rankedStats": {"soloq": {"tier": "PLATINUM", "rank": "IV", "lp": 10, "winrate": 50}, "flex": None},
             },
             {
                 "name": "P2",
-                "tag": "Tag",
+                "tag": "T",
                 "level": 100,
-                "rankedStats": {"soloq": {"tier": "EMERALD", "rank": "IV", "lp": 10, "wins": 0, "losses": 0, "winrate": 50}, "flex": None},
+                "rankedStats": {"soloq": {"tier": "EMERALD", "rank": "IV", "lp": 10, "winrate": 50}, "flex": None},
             },
             {
                 "name": "P3",
-                "tag": "Tag",
+                "tag": "T",
                 "level": 100,
-                "rankedStats": {"soloq": {"tier": "DIAMOND", "rank": "IV", "lp": 10, "wins": 0, "losses": 0, "winrate": 50}, "flex": None},
+                "rankedStats": {"soloq": {"tier": "DIAMOND", "rank": "IV", "lp": 10, "winrate": 50}, "flex": None},
             },
         ]
 
         embed = await cog._create_leaderboard_embed(mock_guild)
 
-        # On vérifie que les abréviations sont bien dans la description
-        assert "PLAT" in embed.description
-        assert "EMER" in embed.description
-        assert "DIAM" in embed.description
+        # CORRECTION : On cherche les noms complets (titrés)
+        assert "Platinum" in embed.description
+        assert "Emerald" in embed.description
+        assert "Diamond" in embed.description
 
     @pytest.mark.asyncio
     async def test_create_embed_long_name_truncation(self, cog):
-        """Couvre la troncature des noms trop longs (>10 chars)."""
-        # Un pseudo très long (18 caractères)
+        """Vérifie qu'un nom long est géré dans le tableau."""
         long_name = "VeryLongNameIndeed"
         cog._save_user(1, "puuid", long_name, "TAG")
 
@@ -759,13 +749,10 @@ class TestCoverageGaps:
             "name": long_name,
             "tag": "Tag",
             "level": 100,
-            "rankedStats": {"soloq": {"tier": "GOLD", "rank": "IV", "lp": 10, "wins": 0, "losses": 0, "winrate": 50}, "flex": None},
+            "rankedStats": {"soloq": {"tier": "GOLD", "rank": "IV", "lp": 10, "winrate": 50}, "flex": None},
         }
 
         embed = await cog._create_leaderboard_embed(mock_guild)
 
-        # Le code coupe à 9 caractères + "…"
-        # "VeryLongNameIndeed" -> "VeryLongN…"
-        expected_name = "VeryLongN…"
-
-        assert expected_name in embed.description
+        # On vérifie que le nom est présent dans le tableau
+        assert "VeryLongNameIndeed" in embed.description

@@ -1,7 +1,6 @@
 # src/cogs/setup_lol.py - Version avec Slash Commands et Leaderboard Auto
 
 import os
-from datetime import datetime
 from typing import Any, Optional
 
 import discord
@@ -314,11 +313,11 @@ class SetupLol(commands.Cog):
     # ============================================================================
 
     async def _create_leaderboard_embed(self, guild: discord.Guild) -> discord.Embed:
-        """Génère un leaderboard compact et aligné (style tableau de bord)."""
+        """Génère un leaderboard en tableau avec un alignement parfait."""
         users = self._load_users()
         players: list[dict[str, Any]] = []
 
-        # 1. Récupération et préparation des données
+        # 1. Récupération des données
         for d_id, u_data in users.items():
             try:
                 member = guild.get_member(int(d_id))
@@ -328,102 +327,54 @@ class SetupLol(commands.Cog):
                 p = self.league_service.make_profile(u_data["puuid"])
                 s = p["rankedStats"]["soloq"]
 
-                if s:
-                    # -- OPTIMISATION DU TEXTE POUR L'ALIGNEMENT --
-
-                    # 1. Raccourcir le rang (ex: "GOLD IV" -> "GOLD 4", "PLATINUM II" -> "PLAT 2")
-                    tier_short = s["tier"][:4]  # Prends les 4 premières lettres (IRON, BRON, SILV, GOLD, PLAT, DIAM...)
-                    if s["tier"] == "PLATINUM":
-                        tier_short = "PLAT"
-                    if s["tier"] == "EMERALD":
-                        tier_short = "EMER"
-                    if s["tier"] == "DIAMOND":
-                        tier_short = "DIAM"
-                    if s["tier"] in ["MASTER", "GRANDMASTER", "CHALLENGER"]:
-                        # M pour Master, GM pour Grandmaster, C pour Chall
-                        tier_short = s["tier"][0] if s["tier"] != "GRANDMASTER" else "GM"
-                        rank_short = ""  # Pas de division pour le high elo
-                    else:
-                        # Conversion chiffres romains I, II, III, IV -> 1, 2, 3, 4
-                        roman_map = {"I": "1", "II": "2", "III": "3", "IV": "4"}
-                        rank_num = roman_map.get(s["rank"], s["rank"])
-                        rank_short = f" {rank_num}"
-
-                    # Résultat: "PLAT 2", "GOLD 4", "M", "C"
-                    rank_display = f"{tier_short}{rank_short}"
-
-                    lp_display = f"{s['lp']}LP"
-                    wr_display = f"{s['winrate']}%"
-
-                    # Score de tri
-                    sort_val = self._get_rank_value({"soloq": s})
-                else:
-                    rank_display = "UNRANK"
-                    lp_display = ""
-                    wr_display = "-"
-                    sort_val = -1
-
                 players.append(
                     {
-                        "sort_val": sort_val,
-                        "name": p["name"],  # Juste le nom Riot, sans le tag pour gagner de la place
-                        "rank_col": rank_display,
-                        "lp_col": lp_display,
-                        "wr_col": wr_display,
+                        "sort_val": self._get_rank_value({"soloq": s}),
+                        "name": f"{p['name']}#{p['tag']}",
+                        "lvl": str(p["level"]),
+                        "rank": f"{s['tier'].title()} {s['rank']} {s['lp']} LP" if s else "Unranked",
+                        "wr": f"{s['winrate']}%" if s else "0%",
                     }
                 )
-
             except Exception as e:
-                logger.warning(f"Skip {u_data.get('pseudo')}: {e}")
+                logger.warning(f"Erreur joueur {u_data.get('pseudo')}: {e}")
                 continue
 
         if not players:
-            return discord.Embed(title="🏆 Classement", description="Aucun joueur classé.", color=discord.Color.gold())
+            return discord.Embed(title="🏆 Classement Solo/Duo", description="Aucun joueur enregistré.", color=discord.Color.gold())
 
         # 2. Tri
         players.sort(key=lambda x: x["sort_val"], reverse=True)
-        top_players = players[:20]
+        top_players = players[:15]
 
-        # 3. Construction du tableau avec alignement strict
-        lines = []
+        # 3. Calcul dynamique du padding pour le pseudo (minimum 15 caractères)
+        max_name_len = max([len(p["name"]) for p in top_players] + [15])
 
-        # En-tête du tableau (Optionnel, mais aide à la lecture)
-        # Format: # | RANG | LP | WR | JOUEUR
-        header = "` # ` ` RANG   ` ` LP   ` ` WR  ` ` JOUEUR `"
-        lines.append(header)
+        # Largeurs fixes pour les autres colonnes
+        w_lvl = 4
+        w_rank = 18
+        w_wr = 6
+
+        # 4. Construction du tableau
+        # En-tête
+        header = f"{'Pseudo':<{max_name_len}} | {'Lvl':<{w_lvl}} | {'Rank':<{w_rank}} | {'WR':<{w_wr}}"
+        separator = "—" * (len(header) + 2)
+
+        lines = [header, separator]
 
         for i, p in enumerate(top_players, 1):
-            # Tronquer le nom si trop long (> 10 caractères)
-            name = p["name"]
-            if len(name) > 10:
-                name = name[:9] + "…"
-
-            # Construction de la ligne
-            # {variable:<X} aligne à gauche sur X caractères
-            # {variable:>X} aligne à droite sur X caractères
-
-            # Rang sur 7 chars ("PLAT 2 " ou "GOLD 4 ")
-            # LP sur 5 chars ("83LP ")
-            # WR sur 4 chars ("52% ")
-
-            line = (
-                f"`{i:02d}` "  # Numéro (01, 02...)
-                f"`{p['rank_col']:<7}` "  # Rang
-                f"`{p['lp_col']:<5}` "  # LP
-                f"`{p['wr_col']:<4}` "  # Winrate
-                f"**{name}**"  # Pseudo (en gras hors du code block pour lisibilité)
-            )
+            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "  "
+            # Formatage de la ligne avec padding
+            line = f"{medal} {p['name']:<{max_name_len}} | {p['lvl']:<{w_lvl}} | {p['rank']:<{w_rank}} | {p['wr']:<{w_wr}}"
             lines.append(line)
 
-        # 4. Assemblage
-        # Note: On n'utilise plus un gros bloc ``` ``` unique, mais des ` ` par colonne
-        # ou un mix pour que ça soit joli sur mobile.
+        # 5. Création de l'Embed
+        description = f"**{len(players)} joueur(s) classé(s)**\n```text\n" + "\n".join(lines) + "\n```"
 
-        description = "\n".join(lines)
-
-        embed = discord.Embed(title=f"🏆 Leaderboard — {guild.name}", description=description, color=discord.Color.gold())
-        embed.set_footer(text="Mis à jour toutes les heures • /lol_link")
-        embed.timestamp = datetime.utcnow()
+        embed = discord.Embed(title="🏆 Classement Solo/Duo", description=description, color=discord.Color.gold())
+        embed.set_footer(text="Rafraîchi toutes les heures • /lol_link pour rejoindre")
+        # Utilisation de timezone-aware datetime pour éviter le warning MyPy
+        embed.timestamp = discord.utils.utcnow()
 
         return embed
 
