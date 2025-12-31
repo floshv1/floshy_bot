@@ -1,6 +1,7 @@
 # src/cogs/setup_lol.py - Version avec Slash Commands et Leaderboard Auto
 
 import os
+from datetime import datetime
 from typing import Any, Optional
 
 import discord
@@ -313,105 +314,83 @@ class SetupLol(commands.Cog):
     # ============================================================================
 
     async def _create_leaderboard_embed(self, guild: discord.Guild) -> discord.Embed:
-        """Crée un embed de leaderboard pour une guild."""
+        """Génère un leaderboard textuel parfaitement aligné (padding dynamique)."""
         users = self._load_users()
 
-        if not users:
-            embed = discord.Embed(
-                title="🏆 Classement Solo/Duo",
-                description="Aucun compte lié pour le moment.\nUtilisez `/lol_link` pour vous ajouter !",
-                color=discord.Color.gold(),
-            )
-            embed.set_footer(text="🔄 Rafraîchi toutes les heures")
-            return embed
+        players: list[dict[str, Any]] = []
 
-        # Récupérer les profils de tous les joueurs
-        players = []
-
-        for discord_id, user_data in users.items():
+        # 1. Récupération des données
+        for d_id, u_data in users.items():
             try:
-                puuid = user_data["puuid"]
-                profile = self.league_service.make_profile(puuid)
+                # Vérifier si le membre est sur le serveur
+                member = guild.get_member(int(d_id))
+                if not member:
+                    continue
 
-                member = await guild.fetch_member(int(discord_id))
-                discord_name = member.display_name
+                p = self.league_service.make_profile(u_data["puuid"])
+
+                # Préparation des données brutes pour le formatage
+                s = p["rankedStats"]["soloq"]
+                if s:
+                    tier = s["tier"].title()
+                    # Pas de division (I, II...) pour les rangs Apex
+                    if tier in ["Master", "Grandmaster", "Challenger"]:
+                        rank_str = f"{tier} • {s['lp']} LP"
+                    else:
+                        rank_str = f"{tier} {s['rank']} • {s['lp']} LP"
+
+                    stats_str = f"{s['winrate']}% WR ({s['wins']}W / {s['losses']}L)"
+                    emoji = self._get_rank_emoji(s["tier"])
+                else:
+                    rank_str = "Unranked"
+                    stats_str = "0% WR"
+                    emoji = "⚫"
 
                 players.append(
                     {
-                        "discord_name": discord_name,
-                        "riot_name": f"{profile['name']}#{profile['tag']}",
-                        "level": profile["level"],
-                        "soloq": profile["rankedStats"]["soloq"],
-                        "flex": profile["rankedStats"]["flex"],
+                        "sort_val": self._get_rank_value({"soloq": s}),  # Pour le tri
+                        "emoji": emoji,
+                        "name": f"{p['name']}#{p['tag']}",
+                        "rank_text": rank_str,
+                        "stats_text": stats_str,
+                        "level_text": f"Niv. {p['level']}",
                     }
                 )
 
             except Exception as e:
-                logger.warning(f"Impossible de récupérer {user_data['pseudo']}: {e}")
+                logger.warning(f"Erreur joueur {u_data.get('pseudo')}: {e}")
                 continue
 
         if not players:
-            embed = discord.Embed(
-                title="🏆 Classement Solo/Duo",
-                description="❌ Impossible de récupérer les stats des joueurs.",
-                color=discord.Color.gold(),
+            return discord.Embed(title="🏆 Classement Solo/Duo", description="Aucun joueur enregistré.", color=discord.Color.gold())
+
+        # 2. Tri des joueurs
+        players.sort(key=lambda x: x["sort_val"], reverse=True)
+        top_players = players[:20]  # Limite pour ne pas dépasser la taille max du message
+
+        # 3. Calcul du Padding (Largeur max de chaque colonne)
+        # On cherche le nom le plus long et le rang le plus long pour aligner le reste
+        max_name_len = max(len(p["name"]) for p in top_players)
+        max_rank_len = max(len(p["rank_text"]) for p in top_players)
+
+        # 4. Construction des lignes alignées
+        lines = []
+        for p in top_players:
+            # f-string : {variable:<{largeur}} permet d'ajouter des espaces à droite
+            line = (
+                f"{p['emoji']} "
+                f"{p['name']:<{max_name_len}} : "  # Aligne les deux points
+                f"{p['rank_text']:<{max_rank_len}} - "  # Aligne le tiret
+                f"{p['stats_text']} — {p['level_text']}"
             )
-            embed.set_footer(text="🔄 Rafraîchi toutes les heures")
-            return embed
+            lines.append(line)
 
-        # Trier par rang
-        players.sort(key=self._get_rank_value, reverse=True)
+        # 5. Création de l'Embed
+        description = "```\n" + "\n".join(lines) + "\n```"
 
-        # Créer l'embed
-        embed = discord.Embed(
-            title="🏆 Classement Solo/Duo",
-            description=f"**{len(players)} joueur(s) classé(s)**",
-            color=discord.Color.gold(),
-        )
+        embed = discord.Embed(title=f"🏆 Leaderboard — {guild.name}", description=description, color=discord.Color.gold())
 
-        # Construire le tableau
-        max_name_len = max(len(p["riot_name"]) for p in players)
-        max_name_len = min(max_name_len, 20)
-
-        table = "```\n"
-        table += f"{'Pseudo':<{max_name_len}} | {'Lvl':>4} | {'Rank':<15} | {'WR':>5}\n"
-        table += "─" * (max_name_len + 33) + "\n"
-
-        for i, player in enumerate(players[:15], 1):  # Limiter à 15 joueurs
-            name = player["riot_name"][:max_name_len]
-            level = player["level"]
-
-            if player["soloq"]:
-                soloq = player["soloq"]
-                tier = soloq["tier"].title()
-                rank = soloq["rank"]
-                lp = soloq["lp"]
-                rank_display = f"{tier} {rank} {lp} LP"[:15]
-                winrate = f"{soloq['winrate']:.1f}%"
-            else:
-                rank_display = "Unranked".ljust(15)
-                winrate = "N/A"
-
-            # Médailles pour le top 3
-            medal = ""
-            if i == 1:
-                medal = "🥇 "
-            elif i == 2:
-                medal = "🥈 "
-            elif i == 3:
-                medal = "🥉 "
-
-            line_name = f"{medal}{name}"
-            table += f"{line_name:<{max_name_len}} | {level:>4} | {rank_display:<15} | {winrate:>5}\n"
-
-        table += "```"
-
-        embed.add_field(name="📊 Classement", value=table, inline=False)
-
-        # Footer avec timestamp
-        from datetime import datetime
-
-        embed.set_footer(text="🔄 Dernière mise à jour")
+        embed.set_footer(text="Rafraîchi toutes les heures • /lol_link pour rejoindre")
         embed.timestamp = datetime.utcnow()
 
         return embed
