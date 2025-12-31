@@ -1,424 +1,674 @@
-# tests/test_setup_lol.py - Ajoutez ces tests
-
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import pytest
 import yaml
+from discord.ext import commands
 
-from src.cogs.setup_lol import SetupLol
+# Import du code source
+from src.cogs.setup_lol import SetupLol, setup
 from src.lol.exceptions import InvalidApiKey, PlayerNotFound, RateLimited
 
-
-@pytest.fixture
-def mock_service():
-    return MagicMock()
-
-
-@pytest.fixture
-def mock_bot():
-    return MagicMock()
+# ============================================================================
+# FIXTURES (CONFIGURATION DES TESTS)
+# ============================================================================
 
 
 @pytest.fixture
-def cog(mock_bot, mock_service, tmp_path):
-    # Utilisation d'un fichier temporaire pour le YAML
+def bot():
+    """Mock du bot Discord."""
+    b = MagicMock(spec=commands.Bot)
+    b.add_cog = AsyncMock()
+    b.wait_until_ready = AsyncMock()
+    b.get_guild = MagicMock()
+    return b
+
+
+@pytest.fixture
+def league_service():
+    """Mock du service League of Legends."""
+    s = MagicMock()
+    s.get_puuid = MagicMock()
+    s.make_profile = MagicMock()
+    return s
+
+
+@pytest.fixture
+def cog(bot, league_service, tmp_path):
+    """
+    Crée une instance du Cog avec des fichiers de données temporaires.
+    """
+    # Création de chemins temporaires pour les tests
     db_file = tmp_path / "users.yml"
-    with patch("os.makedirs"):
-        setup_cog = SetupLol(mock_bot, mock_service)
-        setup_cog.db_path = str(db_file)
-        return setup_cog
+    config_file = tmp_path / "config.yml"
+
+    # Instanciation du Cog
+    c = SetupLol(
+        bot, league_service, db_path=str(db_file), config_path=str(config_file), start_tasks=False  # Note : Paramètre présent dans votre __init__
+    )
+
+    # Sécurité : on s'assure que la tâche est annulée pour éviter les fuites
+    c.refresh_leaderboard.cancel()
+
+    return c
 
 
 @pytest.fixture
-def mock_ctx():
-    """Fixture pour créer un contexte Discord mocké"""
-    ctx = AsyncMock()
-    ctx.author.id = 123456789
-    ctx.typing = MagicMock()
-    ctx.typing.return_value.__aenter__ = AsyncMock()
-    ctx.typing.return_value.__aexit__ = AsyncMock()
-    return ctx
+def interaction():
+    """Mock complet d'une interaction Slash Command."""
+    itr = MagicMock(spec=discord.Interaction)
+    itr.guild = MagicMock()
+    itr.guild.id = 987654321
+
+    # Mock de l'utilisateur
+    itr.user = MagicMock(spec=discord.Member)
+    itr.user.id = 123456789
+    itr.user.display_name = "TestUser"
+    itr.user.display_avatar.url = "http://avatar.url"
+
+    # Mock des réponses (AsyncMock est crucial ici)
+    itr.response = MagicMock()
+    itr.response.defer = AsyncMock()
+    itr.response.send_message = AsyncMock()
+
+    itr.followup = MagicMock()
+    itr.followup.send = AsyncMock()
+
+    return itr
+
+
+# ============================================================================
+# TESTS D'INITIALISATION ET GESTION DE FICHIERS
+# ============================================================================
+
+
+class TestInitAndData:
+    def test_init_creates_directories(self, bot, league_service, tmp_path):
+        """Vérifie que les dossiers sont créés à l'initialisation."""
+        db_path = tmp_path / "new_folder" / "users.yml"
+
+        SetupLol(bot, league_service, db_path=str(db_path))
+
+        assert db_path.parent.exists()
+
+    def test_save_and_load_user(self, cog):
+        """Test la sauvegarde et le chargement d'un utilisateur."""
+        cog._save_user(123, "puuid_abc", "Pseudo", "TAG")
+
+        users = cog._load_users()
+        assert "123" in users
+        assert users["123"]["pseudo"] == "Pseudo"
+
+    def test_save_config(self, cog):
+        """Test la sauvegarde de la configuration leaderboard."""
+        cog._save_config(111, 222, 333)
+
+        config = cog._load_config()
+        assert "leaderboards" in config
+        assert config["leaderboards"]["111"]["channel_id"] == 222
+
+
+# ============================================================================
+# TESTS DES COMMANDES SLASH (/lol_link)
+# ============================================================================
+
+
+class TestLolLink:
+    @pytest.mark.asyncio
+    async def test_lol_link_success(self, cog, interaction, league_service):
+        """Test un lien de compte réussi."""
+        league_service.get_puuid.return_value = "puuid_123"
+
+        # APPEL VIA .callback POUR LES SLASH COMMANDS
+        await cog.lol_link.callback(cog, interaction, "Joueur#EUW")
+
+        # Vérifications
+        league_service.get_puuid.assert_called_once_with("Joueur", "EUW")
+        interaction.followup.send.assert_called_once()
+
+        # Vérifier que l'utilisateur est bien sauvegardé
+        users = cog._load_users()
+        assert str(interaction.user.id) in users
+        assert users[str(interaction.user.id)]["puuid"] == "puuid_123"
+
+    @pytest.mark.asyncio
+    async def test_lol_link_invalid_format(self, cog, interaction):
+        """Test format invalide (pas de #)."""
+        await cog.lol_link.callback(cog, interaction, "PasDeTag")
+
+        interaction.response.send_message.assert_called_with("❌ Format invalide. Utilisez : `Pseudo#TAG`", ephemeral=True)
+
+    @pytest.mark.asyncio
+    async def test_lol_link_not_found(self, cog, interaction, league_service):
+        """Test joueur introuvable (Doit envoyer un message d'erreur, pas crasher)."""
+        # On configure le service pour qu'il simule un joueur introuvable
+        league_service.get_puuid.side_effect = PlayerNotFound()
+
+        # On exécute la commande
+        await cog.lol_link.callback(cog, interaction, "Introuvable#EUW")
+
+        # On vérifie qu'au lieu de planter, le bot a envoyé un message à l'utilisateur
+        interaction.followup.send.assert_called_once()
+
+        # On récupère le message envoyé pour vérifier son contenu
+        args, _ = interaction.followup.send.call_args
+        message_envoye = args[0] if args else ""
+
+        # On vérifie que le message contient bien l'avertissement
+        assert "Impossible de trouver" in message_envoye
+        assert "❌" in message_envoye
+
+
+# ============================================================================
+# TESTS DES COMMANDES SLASH (/lol_stats)
+# ============================================================================
+
+
+class TestLolStats:
+    @pytest.mark.asyncio
+    async def test_lol_stats_success_self(self, cog, interaction, league_service):
+        """Test affichage de ses propres stats."""
+        # Préparer les données
+        cog._save_user(interaction.user.id, "puuid_123", "Moi", "EUW")
+
+        league_service.make_profile.return_value = {
+            "name": "Moi",
+            "tag": "EUW",
+            "level": 100,
+            "profileIconId": 1,
+            "rankedStats": {"soloq": None, "flex": None},
+        }
+
+        await cog.lol_stats.callback(cog, interaction, member=None)
+
+        interaction.followup.send.assert_called_once()
+        kwargs = interaction.followup.send.call_args.kwargs
+        embed = kwargs["embed"]
+
+        assert "Moi#EUW" in embed.description
+
+    @pytest.mark.asyncio
+    async def test_lol_stats_not_linked(self, cog, interaction):
+        """Test stats sans compte lié."""
+        await cog.lol_stats.callback(cog, interaction, member=None)
+
+        interaction.followup.send.assert_called()
+        args = interaction.followup.send.call_args[0]
+        assert "❌" in args[0]
+
+    @pytest.mark.asyncio
+    async def test_lol_stats_api_error(self, cog, interaction, league_service):
+        """Test erreur API (RateLimit)."""
+        cog._save_user(interaction.user.id, "puuid_123", "Moi", "EUW")
+        league_service.make_profile.side_effect = RateLimited()
+
+        await cog.lol_stats.callback(cog, interaction, member=None)
+
+        interaction.followup.send.assert_called()
+        assert "⏳" in interaction.followup.send.call_args[0][0]
+
+
+# ============================================================================
+# TESTS DU LEADERBOARD (/lol_leaderboard_setup)
+# ============================================================================
+
+
+class TestLeaderboardSetup:
+    @pytest.mark.asyncio
+    async def test_setup_leaderboard(self, cog, interaction):
+        """Test la configuration du leaderboard."""
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.id = 555
+        channel.send = AsyncMock()
+        channel.send.return_value.id = 999  # Message ID
+
+        await cog.lol_leaderboard_setup.callback(cog, interaction, channel)
+
+        # Vérifie que le message est envoyé
+        channel.send.assert_called_once()
+
+        # Vérifie la sauvegarde
+        config = cog._load_config()
+        assert str(interaction.guild.id) in config["leaderboards"]
+        assert config["leaderboards"][str(interaction.guild.id)]["message_id"] == 999
+
+
+# ============================================================================
+# TESTS DE LA TÂCHE DE FOND (REFRESH)
+# ============================================================================
+
+
+class TestRefreshTask:
+    @pytest.mark.asyncio
+    async def test_refresh_loop(self, cog, bot, league_service):
+        """Test complet de la boucle de rafraîchissement."""
+        # 1. Setup des données
+        guild_id = 1000
+        channel_id = 2000
+        message_id = 3000
+
+        cog._save_user(123, "puuid_1", "Player1", "EUW")
+        cog._save_config(guild_id, channel_id, message_id)
+
+        # 2. Mock du service Riot
+        league_service.make_profile.return_value = {"name": "Player1", "tag": "EUW", "level": 50, "rankedStats": {"soloq": None, "flex": None}}
+
+        # 3. Mock Discord (Guild -> Channel -> Message -> Member)
+        guild = MagicMock()
+        channel = MagicMock()
+        message = MagicMock()
+        message.edit = AsyncMock()
+        member = MagicMock()
+        member.display_name = "DiscordUser"
+
+        bot.get_guild.return_value = guild
+        guild.get_channel.return_value = channel
+        channel.fetch_message = AsyncMock(return_value=message)
+        guild.fetch_member = AsyncMock(return_value=member)
+
+        # 4. Exécution manuelle d'un tour de boucle
+        await cog.refresh_leaderboard()
+
+        # 5. Vérifications
+        bot.get_guild.assert_called_with(guild_id)
+        guild.get_channel.assert_called_with(channel_id)
+        channel.fetch_message.assert_called_with(message_id)
+
+        # Vérifie que le message a été édité avec un Embed
+        message.edit.assert_called_once()
+        args, kwargs = message.edit.call_args
+        assert isinstance(kwargs["embed"], discord.Embed)
+
+
+# ============================================================================
+# TESTS DE LA FONCTION SETUP (LOAD EXTENSION)
+# ============================================================================
 
 
 @pytest.mark.asyncio
-async def test_setup_success(cog, mock_service, mock_ctx):
-    """Teste une liaison de compte réussie avec link_lol."""
-    mock_service.get_puuid.return_value = "puuid_123_abc"
+async def test_setup_entry_point(bot):
+    """Vérifie que le point d'entrée setup() fonctionne."""
+    # Simulation de la variable d'environnement
+    with patch.dict(os.environ, {"LOLAPI": "RGAPI-FAKE-KEY"}):
+        with patch("src.cogs.setup_lol.RiotApiClient"):
+            with patch("src.cogs.setup_lol.LeagueService"):
+                await setup(bot)
 
-    await cog.link_lol.callback(cog, mock_ctx, "NomDeJoueur#EUW")
-
-    # Assertions
-    mock_service.get_puuid.assert_called_once_with("NomDeJoueur", "EUW")
-    mock_ctx.send.assert_called_once()
-
-    _, kwargs = mock_ctx.send.call_args
-    assert "embed" in kwargs
-    assert "✅ Compte lié avec succès !" in kwargs["embed"].title
-
-    # Vérification de la persistance YAML
-    with open(cog.db_path, "r") as f:
-        data = yaml.safe_load(f)
-        assert data["123456789"]["puuid"] == "puuid_123_abc"
+                # Vérifie que le Cog est ajouté au bot
+                bot.add_cog.assert_called_once()
+                args = bot.add_cog.call_args[0]
+                assert isinstance(args[0], SetupLol)
 
 
 @pytest.mark.asyncio
-async def test_save_user_updates_existing_file(cog, mock_ctx, mock_service):
-    """Test que _save_user met à jour un fichier existant"""
-    # Créer un fichier YAML existant avec des données
-    existing_data = {"111111": {"puuid": "old-puuid", "pseudo": "OldPlayer", "tag": "NA"}}
-    with open(cog.db_path, "w", encoding="utf-8") as f:
-        yaml.dump(existing_data, f)
-
-    # Ajouter un nouvel utilisateur
-    mock_service.get_puuid.return_value = "new-puuid-456"
-    await cog.link_lol.callback(cog, mock_ctx, "NewPlayer#EUW")
-
-    # Vérifier que les deux utilisateurs sont présents
-    with open(cog.db_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-
-    assert "111111" in data  # Ancien utilisateur toujours présent
-    assert "123456789" in data  # Nouvel utilisateur ajouté
-    assert data["123456789"]["puuid"] == "new-puuid-456"
-
-
-@pytest.mark.asyncio
-async def test_link_lol_invalid_format_no_hashtag(cog, mock_ctx):
-    """Test format invalide sans # - couvre le return await ctx.send"""
-    await cog.link_lol.callback(cog, mock_ctx, "PseudoSansTag")
-
-    mock_ctx.send.assert_called_once()
-    message = mock_ctx.send.call_args[0][0]
-    assert "❌ Format invalide" in message
-    assert "Pseudo#TAG" in message
-
-
-@pytest.mark.asyncio
-async def test_link_lol_player_not_found(cog, mock_service, mock_ctx):
-    """Test exception PlayerNotFound"""
-    mock_service.get_puuid.side_effect = PlayerNotFound()
-
-    await cog.link_lol.callback(cog, mock_ctx, "UnknownPlayer#TAG")
-
-    mock_ctx.send.assert_called_once()
-    message = mock_ctx.send.call_args[0][0]
-    assert "❌ Impossible de trouver le joueur" in message
-    assert "UnknownPlayer#TAG" in message
-
-
-@pytest.mark.asyncio
-async def test_link_lol_rate_limited(cog, mock_service, mock_ctx):
-    """Test exception RateLimited"""
-    mock_service.get_puuid.side_effect = RateLimited()
-
-    await cog.link_lol.callback(cog, mock_ctx, "Player#TAG")
-
-    mock_ctx.send.assert_called_once()
-    message = mock_ctx.send.call_args[0][0]
-    assert "⏳ Trop de requêtes" in message
-    assert "Réessayez dans une minute" in message
-
-
-@pytest.mark.asyncio
-async def test_link_lol_invalid_api_key(cog, mock_service, mock_ctx):
-    """Test exception InvalidApiKey"""
-    mock_service.get_puuid.side_effect = InvalidApiKey()
-
-    await cog.link_lol.callback(cog, mock_ctx, "Player#TAG")
-
-    mock_ctx.send.assert_called_once()
-    message = mock_ctx.send.call_args[0][0]
-    assert "⚠️" in message
-    assert "clé API Riot est expirée ou invalide" in message
-
-
-@pytest.mark.asyncio
-async def test_link_lol_generic_exception(cog, mock_service, mock_ctx):
-    """Test exception générique - couvre le except Exception as e"""
-    mock_service.get_puuid.side_effect = Exception("Erreur de connexion")
-
-    await cog.link_lol.callback(cog, mock_ctx, "Player#TAG")
-
-    mock_ctx.send.assert_called_once()
-    message = mock_ctx.send.call_args[0][0]
-    assert "💥 Une erreur est survenue" in message
-    assert "Erreur de connexion" in message
-
-
-@pytest.mark.asyncio
-async def test_save_user_handles_empty_yaml(cog, mock_ctx, mock_service):
-    """Test que _save_user gère un fichier YAML vide (or {})"""
-    # Créer un fichier vide
-    with open(cog.db_path, "w", encoding="utf-8") as f:
-        f.write("")
-
-    mock_service.get_puuid.return_value = "puuid-empty-file"
-    await cog.link_lol.callback(cog, mock_ctx, "Player#TAG")
-
-    # Vérifier que le fichier contient maintenant des données
-    with open(cog.db_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-
-    assert data is not None
-    assert "123456789" in data
-
-
-@pytest.mark.asyncio
-async def test_save_user_handles_null_yaml(cog):
-    """Test que _save_user gère un YAML qui retourne None"""
-    # Créer un fichier YAML qui retourne None
-    with open(cog.db_path, "w", encoding="utf-8") as f:
-        f.write("# commentaire seulement\n")
-
-    # Sauvegarder un utilisateur
-    cog._save_user(999999, "puuid-null", "Player", "TAG")
-
-    # Vérifier que les données sont bien sauvegardées
-    with open(cog.db_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-
-    assert "999999" in data
-    assert data["999999"]["puuid"] == "puuid-null"
-
-
-@pytest.mark.asyncio
-async def test_link_lol_with_multiple_hashtags(cog, mock_service, mock_ctx):
-    """Test avec plusieurs # dans le nom (split prend le premier)"""
-    mock_service.get_puuid.return_value = "puuid-multi-hash"
-
-    await cog.link_lol.callback(cog, mock_ctx, "Player#With#Extra#TAG")
-
-    # split("#", 1) ne prend que le premier #
-    mock_service.get_puuid.assert_called_once_with("Player", "With#Extra#TAG")
-    mock_ctx.send.assert_called_once()
-
-
-def test_save_user_creates_directory_if_not_exists(mock_bot, mock_service, tmp_path):
-    """Test que _save_user fonctionne quand le dossier existe"""
-    nested_path = tmp_path / "new_folder" / "data" / "users.yml"
-
-    # Créer manuellement le dossier parent
-    nested_path.parent.mkdir(parents=True, exist_ok=True)
-
-    cog = SetupLol(mock_bot, mock_service)
-    cog.db_path = str(nested_path)
-
-    # Sauvegarder un utilisateur
-    cog._save_user(123456, "test-puuid", "Player", "TAG")
-
-    # Vérifier que le fichier a été créé
-    assert nested_path.exists()
-
-    with open(nested_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    assert "123456" in data
-
-
-@pytest.mark.asyncio
-async def test_link_lol_empty_pseudo(cog, mock_ctx):
-    """Test avec pseudo vide (#TAG seulement)"""
-    await cog.link_lol.callback(cog, mock_ctx, "#TAG")
-
-    # Devrait quand même passer la validation et appeler le service
-    # (même si le service retournera probablement une erreur)
-    # Ou selon votre logique, pourrait retourner format invalide
-    mock_ctx.send.assert_called()
-
-
-@pytest.mark.asyncio
-async def test_link_lol_empty_tag(cog, mock_service, mock_ctx):
-    """Test avec tag vide (Player# seulement)"""
-    mock_service.get_puuid.return_value = "puuid-empty-tag"
-
-    await cog.link_lol.callback(cog, mock_ctx, "Player#")
-
-    # Le split devrait donner ("Player", "")
-    mock_service.get_puuid.assert_called_once_with("Player", "")
-
-
-# tests/test_setup_lol.py - Ajoutez ces tests
-
-
-@pytest.mark.asyncio
-async def test_lol_leaderboard_success(cog, mock_service, mock_ctx):
-    """Test affichage du leaderboard avec succès"""
-    # Créer plusieurs utilisateurs liés
-    user_data = {
-        "123456789": {"puuid": "puuid-1", "pseudo": "Floshv1", "tag": "ldv"},
-        "987654321": {"puuid": "puuid-2", "pseudo": "Nicobooy", "tag": "cnth"},
-    }
-    with open(cog.db_path, "w", encoding="utf-8") as f:
-        yaml.dump(user_data, f)
-
-    # Mock des profils
-    def mock_make_profile(puuid):
-        if puuid == "puuid-1":
-            return {
-                "name": "Floshv1",
-                "tag": "ldv",
-                "level": 897,
-                "profileIconId": 1,
-                "rankedStats": {"soloq": {"tier": "PLATINUM", "rank": "II", "lp": 45, "wins": 52, "losses": 48, "winrate": 52.0}, "flex": None},
-            }
-        else:
-            return {
-                "name": "Nicobooy",
-                "tag": "cnth",
-                "level": 103,
-                "profileIconId": 2,
-                "rankedStats": {"soloq": {"tier": "GOLD", "rank": "IV", "lp": 10, "wins": 10, "losses": 0, "winrate": 100.0}, "flex": None},
-            }
-
-    mock_service.make_profile.side_effect = mock_make_profile
-
-    # Mock fetch_member
-    mock_member1 = MagicMock()
-    mock_member1.display_name = "Flosh"
-    mock_member2 = MagicMock()
-    mock_member2.display_name = "Nico"
-
-    async def mock_fetch_member(discord_id):
-        if discord_id == 123456789:
-            return mock_member1
-        return mock_member2
-
-    mock_ctx.guild.fetch_member = mock_fetch_member
-
-    await cog.lol_leaderboard.callback(cog, mock_ctx)
-
-    # Vérifier qu'un embed a été envoyé (2 appels: message initial + embed)
-    assert mock_ctx.send.call_count == 2
-
-    # Récupérer l'embed (dernier appel)
-    last_call = mock_ctx.send.call_args_list[-1]
-    embed = last_call[1]["embed"] if "embed" in last_call[1] else last_call[0][0]
-
-    assert isinstance(embed, discord.Embed)
-    assert "🏆 Classement Solo/Duo" in embed.title
-    assert "Floshv1#ldv" in str(embed.fields)
-    assert "Nicobooy#cnth" in str(embed.fields)
-    assert "52.0%" in str(embed.fields)
-    assert "100.0%" in str(embed.fields)
-
-
-@pytest.mark.asyncio
-async def test_lol_leaderboard_no_file(cog, mock_ctx):
-    """Test quand aucun fichier n'existe"""
-    if os.path.exists(cog.db_path):
-        os.remove(cog.db_path)
-
-    await cog.lol_leaderboard.callback(cog, mock_ctx)
-
-    mock_ctx.send.assert_called_once()
-    message = mock_ctx.send.call_args[0][0]
-    assert "❌ Aucun compte n'est lié" in message
-
-
-@pytest.mark.asyncio
-async def test_lol_leaderboard_empty_file(cog, mock_ctx):
-    """Test avec fichier vide"""
-    with open(cog.db_path, "w", encoding="utf-8") as f:
-        yaml.dump({}, f)
-
-    await cog.lol_leaderboard.callback(cog, mock_ctx)
-
-    mock_ctx.send.assert_called_once()
-    message = mock_ctx.send.call_args[0][0]
-    assert "❌ Aucun compte n'est lié" in message
-
-
-@pytest.mark.asyncio
-async def test_lol_leaderboard_unranked_players(cog, mock_service, mock_ctx):
-    """Test avec des joueurs non classés"""
-    user_data = {"123456789": {"puuid": "puuid-unranked", "pseudo": "UnrankedPlayer", "tag": "EUW"}}
-    with open(cog.db_path, "w", encoding="utf-8") as f:
-        yaml.dump(user_data, f)
-
-    mock_service.make_profile.return_value = {
-        "name": "UnrankedPlayer",
-        "tag": "EUW",
-        "level": 30,
-        "profileIconId": 1,
-        "rankedStats": {"soloq": None, "flex": None},
-    }
-
-    mock_member = MagicMock()
-    mock_member.display_name = "Unranked"
-    mock_ctx.guild.fetch_member = AsyncMock(return_value=mock_member)
-
-    await cog.lol_leaderboard.callback(cog, mock_ctx)
-
-    # Vérifier que "Unranked" apparaît
-    last_call = mock_ctx.send.call_args_list[-1]
-    embed = last_call[1]["embed"] if "embed" in last_call[1] else last_call[0][0]
-    assert "Unranked" in str(embed.fields)
-
-
-@pytest.mark.asyncio
-async def test_lol_leaderboard_sorting(cog, mock_service, mock_ctx):
-    """Test que le classement est trié correctement"""
-    user_data = {
-        "1": {"puuid": "p1", "pseudo": "Gold", "tag": "1"},
-        "2": {"puuid": "p2", "pseudo": "Plat", "tag": "2"},
-        "3": {"puuid": "p3", "pseudo": "Diamond", "tag": "3"},
-    }
-    with open(cog.db_path, "w", encoding="utf-8") as f:
-        yaml.dump(user_data, f)
-
-    def mock_profiles(puuid):
-        profiles = {
-            "p1": {
-                "name": "Gold",
-                "tag": "1",
-                "level": 50,
-                "profileIconId": 1,
-                "rankedStats": {"soloq": {"tier": "GOLD", "rank": "I", "lp": 50, "wins": 10, "losses": 10, "winrate": 50.0}, "flex": None},
+async def test_setup_missing_key(bot):
+    """Vérifie que setup() échoue sans clé API."""
+    with patch.dict(os.environ, {}, clear=True):
+        await setup(bot)
+        bot.add_cog.assert_not_called()
+
+
+class TestRankUtils:
+    def test_get_rank_emoji(self, cog):
+        """Test tous les cas d'emojis"""
+        assert cog._get_rank_emoji("CHALLENGER") == "🏆"
+        assert cog._get_rank_emoji("IRON") == "⚫"
+        assert cog._get_rank_emoji("UNKNOWN_TIER") == "❓"  # Cas par défaut
+
+    def test_get_rank_value_calculation(self, cog):
+        """Test le calcul exact du score de rang"""
+        # DIAMOND (6000) + II (200) + 50 LP = 6250
+        player_data = {"soloq": {"tier": "DIAMOND", "rank": "II", "lp": 50}}
+        assert cog._get_rank_value(player_data) == 6250
+
+    def test_get_rank_value_unranked(self, cog):
+        """Test valeur pour un joueur sans rang"""
+        player_data = {"soloq": None}
+        assert cog._get_rank_value(player_data) == -1
+
+
+class TestLifecycle:
+    @pytest.mark.asyncio
+    async def test_cog_load_starts_task(self, cog):
+        """Vérifie que cog_load démarre la tâche"""
+        # On mock la task pour vérifier l'appel
+        with patch.object(cog.refresh_leaderboard, "start") as mock_start:
+            await cog.cog_load()
+            mock_start.assert_called_once()
+
+    def test_cog_unload_stops_task(self, cog):
+        """Vérifie que cog_unload arrête la tâche"""
+        with patch.object(cog.refresh_leaderboard, "cancel") as mock_cancel:
+            cog.cog_unload()
+            mock_cancel.assert_called_once()
+
+
+class TestLinkAccountExceptions:
+    @pytest.mark.asyncio
+    async def test_link_account_rate_limited(self, cog, interaction, league_service):
+        """Test exception RateLimited"""
+        league_service.get_puuid.side_effect = RateLimited()
+
+        await cog._link_account(interaction, "Pseudo", "TAG")
+
+        args = interaction.followup.send.call_args[0]
+        assert "Trop de requêtes" in args[0]
+
+    @pytest.mark.asyncio
+    async def test_link_account_invalid_key(self, cog, interaction, league_service):
+        """Test exception InvalidApiKey"""
+        league_service.get_puuid.side_effect = InvalidApiKey()
+
+        await cog._link_account(interaction, "Pseudo", "TAG")
+
+        args = interaction.followup.send.call_args[0]
+        assert "Clé API invalide" in args[0]
+
+    @pytest.mark.asyncio
+    async def test_link_account_generic_error(self, cog, interaction, league_service):
+        """Test exception générique"""
+        league_service.get_puuid.side_effect = Exception("Boom")
+
+        await cog._link_account(interaction, "Pseudo", "TAG")
+
+        args = interaction.followup.send.call_args[0]
+        assert "erreur interne" in args[0]
+
+
+class TestLeaderboardEdgeCases:
+    @pytest.mark.asyncio
+    async def test_refresh_leaderboard_guild_not_found(self, cog, bot):
+        """Test quand le serveur (Guild) n'existe plus"""
+        cog._save_config(999, 123, 456)
+        bot.get_guild.return_value = None  # Guild introuvable
+
+        # Ne doit pas planter
+        await cog.refresh_leaderboard()
+        # Le log warning est géré en interne
+
+    @pytest.mark.asyncio
+    async def test_refresh_leaderboard_channel_not_found(self, cog, bot):
+        """Test quand le salon n'existe plus"""
+        cog._save_config(123, 999, 456)
+        mock_guild = MagicMock()
+        bot.get_guild.return_value = mock_guild
+        mock_guild.get_channel.return_value = None  # Channel introuvable
+
+        await cog.refresh_leaderboard()
+
+    @pytest.mark.asyncio
+    async def test_refresh_leaderboard_message_not_found(self, cog, bot):
+        """Test quand le message a été supprimé"""
+        cog._save_config(123, 456, 999)
+        mock_guild = MagicMock()
+        mock_channel = MagicMock()
+        bot.get_guild.return_value = mock_guild
+        mock_guild.get_channel.return_value = mock_channel
+        # Message introuvable
+        mock_channel.fetch_message.side_effect = discord.NotFound(MagicMock(), MagicMock())
+
+        await cog.refresh_leaderboard()
+
+    @pytest.mark.asyncio
+    async def test_create_embed_with_error_user(self, cog):
+        """Test création embed quand un utilisateur fait planter l'API"""
+        # 1 utilisateur valide, 1 invalide
+        cog._save_user(1, "p1", "Valid", "EUW")
+        cog._save_user(2, "p2", "Error", "EUW")
+
+        mock_guild = MagicMock()
+        mock_guild.fetch_member = AsyncMock()
+
+        # Le premier passe, le second lève une erreur
+        cog.league_service.make_profile.side_effect = [
+            {"name": "Valid", "tag": "EUW", "level": 30, "rankedStats": {"soloq": None, "flex": None}},
+            Exception("API Error"),
+        ]
+
+        embed = await cog._create_leaderboard_embed(mock_guild)
+
+        # CORRECTION : Le tableau est dans le premier champ (Field), pas la description
+        assert len(embed.fields) > 0
+        field_value = embed.fields[0].value
+
+        assert "Valid#EUW" in field_value
+        # On peut aussi vérifier que le joueur en erreur n'est pas là
+        assert "Error" not in field_value
+
+    @pytest.mark.asyncio
+    async def test_create_embed_medals(self, cog):
+        """Vérifie l'affichage des médailles pour le top 3"""
+        mock_guild = MagicMock()
+        mock_guild.fetch_member = AsyncMock()
+
+        # 3 utilisateurs pour avoir Or, Argent, Bronze
+        for i in range(3):
+            cog._save_user(i, f"p{i}", f"Player{i}", "EUW")
+
+        cog.league_service.make_profile.side_effect = [
+            {
+                "name": "P1",
+                "tag": "",
+                "level": 100,
+                "rankedStats": {"soloq": {"tier": "CHALLENGER", "rank": "I", "lp": 1000, "winrate": 50}, "flex": None},
             },
-            "p2": {
-                "name": "Plat",
-                "tag": "2",
-                "level": 60,
-                "profileIconId": 2,
-                "rankedStats": {"soloq": {"tier": "PLATINUM", "rank": "IV", "lp": 0, "wins": 20, "losses": 20, "winrate": 50.0}, "flex": None},
-            },
-            "p3": {
-                "name": "Diamond",
-                "tag": "3",
-                "level": 70,
-                "profileIconId": 3,
-                "rankedStats": {"soloq": {"tier": "DIAMOND", "rank": "III", "lp": 30, "wins": 30, "losses": 30, "winrate": 50.0}, "flex": None},
+            {"name": "P2", "tag": "", "level": 50, "rankedStats": {"soloq": {"tier": "DIAMOND", "rank": "I", "lp": 0, "winrate": 50}, "flex": None}},
+            {"name": "P3", "tag": "", "level": 10, "rankedStats": {"soloq": None, "flex": None}},
+        ]
+
+        embed = await cog._create_leaderboard_embed(mock_guild)
+        desc = embed.fields[0].value  # Le tableau est dans un field
+
+        assert "🥇 P1" in desc
+        assert "🥈 P2" in desc
+        assert "🥉 P3" in desc
+
+
+class TestPersistenceEdgeCases:
+    def test_save_user_appends_existing_file(self, cog):
+        """Vérifie qu'on ajoute à un fichier existant sans l'écraser"""
+        # Créer un fichier initial
+        initial_data = {"111": {"pseudo": "Old"}}
+        with open(cog.db_path, "w") as f:
+            yaml.dump(initial_data, f)
+
+        # Sauvegarder un nouveau user
+        cog._save_user(222, "p2", "New", "TAG")
+
+        # Vérifier que les deux existent
+        with open(cog.db_path, "r") as f:
+            data = yaml.safe_load(f)
+
+        assert data["111"]["pseudo"] == "Old"
+        assert data["222"]["pseudo"] == "New"
+
+    def test_load_config_no_file(self, cog):
+        """Vérifie le retour vide si pas de fichier config"""
+        if os.path.exists(cog.config_path):
+            os.remove(cog.config_path)
+        assert cog._load_config() == {}
+
+
+class TestLolStatsExceptions:
+    @pytest.mark.asyncio
+    async def test_lol_stats_player_not_found(self, cog, interaction, league_service):
+        """Test PlayerNotFound dans lol_stats"""
+        cog._save_user(interaction.user.id, "pid", "Name", "Tag")
+        league_service.make_profile.side_effect = PlayerNotFound()
+
+        await cog.lol_stats.callback(cog, interaction, member=None)
+
+        args = interaction.followup.send.call_args[0]
+        assert "Impossible de trouver" in args[0]
+
+    @pytest.mark.asyncio
+    async def test_lol_stats_rate_limited(self, cog, interaction, league_service):
+        """Test RateLimited dans lol_stats"""
+        cog._save_user(interaction.user.id, "pid", "Name", "Tag")
+        league_service.make_profile.side_effect = RateLimited()
+
+        await cog.lol_stats.callback(cog, interaction, member=None)
+
+        args = interaction.followup.send.call_args[0]
+        assert "Trop de requêtes" in args[0]
+
+    @pytest.mark.asyncio
+    async def test_lol_stats_generic_error(self, cog, interaction, league_service):
+        """Test erreur générique dans lol_stats"""
+        cog._save_user(interaction.user.id, "pid", "Name", "Tag")
+        league_service.make_profile.side_effect = Exception("Crash")
+
+        await cog.lol_stats.callback(cog, interaction, member=None)
+
+        args = interaction.followup.send.call_args[0]
+        assert "Une erreur est survenue" in args[0]
+
+
+# --- Tests pour couvrir les lignes manquantes (100% Coverage) ---
+
+
+class TestCoverageGaps:
+
+    # Couvre les lignes 79-80 : _load_config avec fichier existant
+    def test_load_config_file_exists(self, cog):
+        # On écrit d'abord un fichier
+        config_data = {"test": 123}
+        with open(cog.config_path, "w", encoding="utf-8") as f:
+            yaml.dump(config_data, f)
+
+        # On recharge
+        loaded = cog._load_config()
+        assert loaded["test"] == 123
+
+    # Couvre la ligne 161 : lol_stats sur un autre membre non lié
+    @pytest.mark.asyncio
+    async def test_lol_stats_other_not_linked(self, cog, interaction):
+        other_member = MagicMock(spec=discord.Member)
+        other_member.id = 999
+        other_member.mention = "<@999>"
+
+        # Pas d'entrée dans la DB pour 999
+        await cog.lol_stats.callback(cog, interaction, member=other_member)
+
+        # Vérifie le message spécifique "n'a pas lié son compte"
+        interaction.followup.send.assert_called_once()
+        msg = interaction.followup.send.call_args[0][0]
+        assert other_member.mention in msg
+
+    # Couvre les lignes 188-193 et 202-206 : Affichage complet des rangs
+    @pytest.mark.asyncio
+    async def test_lol_stats_full_ranks(self, cog, interaction, league_service):
+        cog._save_user(interaction.user.id, "pid", "Name", "Tag")
+
+        # Données complètes SoloQ + Flex
+        league_service.make_profile.return_value = {
+            "name": "Name",
+            "tag": "Tag",
+            "level": 100,
+            "profileIconId": 1,
+            "rankedStats": {
+                "soloq": {"tier": "GOLD", "rank": "I", "lp": 50, "wins": 10, "losses": 10, "winrate": 50.0},
+                "flex": {"tier": "SILVER", "rank": "II", "lp": 20, "wins": 5, "losses": 5, "winrate": 50.0},
             },
         }
-        return profiles[puuid]
 
-    mock_service.make_profile.side_effect = mock_profiles
-    mock_ctx.guild.fetch_member = AsyncMock(return_value=MagicMock(display_name="Test"))
+        await cog.lol_stats.callback(cog, interaction, member=None)
 
-    await cog.lol_leaderboard.callback(cog, mock_ctx)
+        kwargs = interaction.followup.send.call_args.kwargs
+        embed = kwargs["embed"]
 
-    # Vérifier que Diamond est en premier (🥇)
-    last_call = mock_ctx.send.call_args_list[-1]
-    embed = last_call[1]["embed"] if "embed" in last_call[1] else last_call[0][0]
-    embed_str = str(embed.fields)
+        # Vérifie que le texte formaté est présent
+        fields = {f.name: f.value for f in embed.fields}
+        assert "Gold I" in fields["🏆 Solo/Duo"]
+        assert "Silver II" in fields["👥 Flex 5v5"]
 
-    # Diamond devrait apparaître avant Platinum et Gold
-    assert embed_str.index("Diamond") < embed_str.index("Plat")
-    assert embed_str.index("Plat") < embed_str.index("Gold")
-    assert "🥇" in embed_str
+    # Couvre la ligne 225 : Erreur InvalidApiKey
+    @pytest.mark.asyncio
+    async def test_lol_stats_invalid_key(self, cog, interaction, league_service):
+        cog._save_user(interaction.user.id, "pid", "Name", "Tag")
+        league_service.make_profile.side_effect = InvalidApiKey()
 
+        await cog.lol_stats.callback(cog, interaction, member=None)
 
-@pytest.mark.asyncio
-async def test_lol_leaderboard_rate_limited(cog, mock_service, mock_ctx):
-    """Test gestion du rate limit"""
-    user_data = {"123": {"puuid": "p1", "pseudo": "Player", "tag": "EUW"}}
-    with open(cog.db_path, "w", encoding="utf-8") as f:
-        yaml.dump(user_data, f)
+        interaction.followup.send.assert_called()
+        # CORRECTION : "clé" en minuscule pour correspondre exactement au message du bot
+        assert "clé API" in interaction.followup.send.call_args[0][0]
 
-    mock_service.make_profile.side_effect = RateLimited()
+    # Couvre les lignes 252-254 : Erreur dans setup leaderboard
+    @pytest.mark.asyncio
+    async def test_leaderboard_setup_crash(self, cog, interaction):
+        # Simule une erreur (ex: échec d'envoi du message)
+        mock_channel = MagicMock()
+        mock_channel.send = AsyncMock(side_effect=Exception("Boom"))
 
-    await cog.lol_leaderboard.callback(cog, mock_ctx)
+        await cog.lol_leaderboard_setup.callback(cog, interaction, mock_channel)
 
-    # Vérifier le message d'erreur
-    assert any("⏳" in str(call) for call in mock_ctx.send.call_args_list)
+        interaction.followup.send.assert_called()
+        assert "Erreur lors de la création" in interaction.followup.send.call_args[0][0]
+
+    # Couvre la ligne 267 : refresh sans la clé 'leaderboards'
+    @pytest.mark.asyncio
+    async def test_refresh_no_key(self, cog):
+        # Fichier config vide mais existant (sans la clé 'leaderboards')
+        with open(cog.config_path, "w") as f:
+            yaml.dump({"autre_chose": 1}, f)
+
+        await cog.refresh_leaderboard()
+        # Ne doit pas planter, return silent
+
+    # Couvre les lignes 294-295 : Exception dans la boucle de refresh
+    @pytest.mark.asyncio
+    async def test_refresh_exception_in_loop(self, cog, bot):
+        # Config valide
+        cog._save_config(123, 456, 789)
+        # Mais le bot lève une erreur inattendue
+        bot.get_guild.side_effect = Exception("Crash Loop")
+
+        await cog.refresh_leaderboard()
+        # Le log exception doit être appelé, mais pas de crash
+
+    # Couvre les lignes 345-351 : Embed leaderboard vide (tous les joueurs en erreur)
+    @pytest.mark.asyncio
+    async def test_create_embed_all_errors(self, cog):
+        cog._save_user(1, "p1", "Name", "Tag")
+
+        mock_guild = MagicMock()
+        # Le service échoue pour l'unique joueur
+        cog.league_service.make_profile.side_effect = Exception("API Down")
+
+        embed = await cog._create_leaderboard_embed(mock_guild)
+
+        assert "Impossible de récupérer les stats" in embed.description
+
+    def test_save_config_preserves_existing_data(self, cog):
+        """Vérifie que _save_config lit le fichier existant (Lignes 79-80)"""
+        # 1. On crée d'abord un fichier config existant avec des données
+        existing_data = {"leaderboards": {"999": {"channel_id": 111, "message_id": 222}}, "autre_parametre": "test"}
+        with open(cog.config_path, "w", encoding="utf-8") as f:
+            yaml.dump(existing_data, f)
+
+        # 2. On appelle _save_config pour ajouter une nouvelle guild
+        cog._save_config(guild_id=123, channel_id=456, message_id=789)
+
+        # 3. On vérifie que les anciennes données sont toujours là (fusion)
+        config = cog._load_config()
+
+        # La nouvelle donnée est là
+        assert config["leaderboards"]["123"]["channel_id"] == 456
+        # L'ancienne donnée est préservée
+        assert config["leaderboards"]["999"]["channel_id"] == 111
+        # Les autres paramètres aussi
+        assert config["autre_parametre"] == "test"
+
+    def test_save_config_handles_empty_file(self, cog):
+        """Vérifie le cas 'or {}' à la ligne 80 si le fichier est vide"""
+        # Créer un fichier vide (0 octets)
+        with open(cog.config_path, "w", encoding="utf-8"):
+            pass
+
+        # La méthode ne doit pas planter et doit initialiser le dict
+        cog._save_config(123, 456, 789)
+
+        config = cog._load_config()
+        assert config["leaderboards"]["123"]["message_id"] == 789

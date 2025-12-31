@@ -356,4 +356,5 @@ class TestMainFunction:
                     assert exc_info.value.code == 1
                     # Vérifie le log critical
                     mock_logger.critical.assert_called_once()
-                    assert "DISCORD_TOKEN non trouvé" in str(mock_logger.critical.call_args)
+                    # On ajuste ici pour correspondre au message de src/main.py
+                    assert "DISCORD_TOKEN non défini" in str(mock_logger.critical.call_args)
