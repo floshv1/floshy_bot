@@ -433,9 +433,10 @@ class TestLeaderboardEdgeCases:
 
         embed = await cog._create_leaderboard_embed(mock_guild)
 
-        # CORRECTION : Le leaderboard actuel est textuel (description), il n'a pas de fields.
-        assert "Valid#EUW" in embed.description
-        assert len(embed.fields) == 0
+        # CORRECTION : Le nouveau format affiche "**Valid**" (nom gras sans tag)
+        assert "**Valid**" in embed.description
+        # On vérifie que le joueur en erreur n'est pas là
+        assert "Error" not in embed.description
 
 
 class TestPersistenceEdgeCases:
@@ -647,42 +648,42 @@ class TestCoverageGaps:
         config = cog._load_config()
         assert config["leaderboards"]["123"]["message_id"] == 789
 
-    # 1. Couvre la ligne 242 : Commande lancée en Message Privé (DM)
+    # 1. Test de sécurité : Commande lancée en DM (Ligne 242)
     @pytest.mark.asyncio
     async def test_leaderboard_setup_dm(self, cog, interaction):
         """Vérifie que la commande est bloquée si pas de guilde."""
-        interaction.guild = None  # Simule un DM
+        interaction.guild = None  # Simule un Message Privé
 
         await cog.lol_leaderboard_setup.callback(cog, interaction, MagicMock())
 
         interaction.response.send_message.assert_called_with("❌ Cette commande doit être utilisée sur un serveur.", ephemeral=True)
 
-    # 2. Couvre la ligne 310 : wait_until_ready dans le before_loop
+    # 2. Test technique : Attente du bot ready (Ligne 310)
     @pytest.mark.asyncio
     async def test_before_refresh_leaderboard(self, cog, bot):
-        """Vérifie l'attente du bot avant la tâche."""
+        """Vérifie que la tâche attend que le bot soit prêt."""
         await cog.before_refresh_leaderboard()
         bot.wait_until_ready.assert_called_once()
 
-    # 3. Couvre la ligne 328 : Joueur enregistré mais qui a quitté le serveur
+    # 3. Test logique : Membre parti du serveur (Ligne 328)
     @pytest.mark.asyncio
     async def test_create_embed_member_left(self, cog):
-        """Vérifie qu'on ignore un membre introuvable sur le discord."""
+        """Vérifie qu'on ignore un joueur s'il a quitté le Discord."""
         cog._save_user(123, "puuid", "Parti", "Tag")
 
         mock_guild = MagicMock()
-        # get_member renvoie None (membre parti)
+        # get_member renvoie None = le membre n'est plus là
         mock_guild.get_member.return_value = None
 
         embed = await cog._create_leaderboard_embed(mock_guild)
 
-        # Le joueur ne doit pas apparaître
+        # Le pseudo ne doit PAS apparaître dans le tableau
         assert "Parti" not in embed.description
 
-    # 4. Couvre la ligne 338 : Affichage spécifique Apex (Master/GM/Challenger)
+    # 4. Test formatage : Rang Apex / Master+ (Ligne 338)
     @pytest.mark.asyncio
     async def test_create_embed_apex_tier(self, cog):
-        """Vérifie le formatage spécial sans division pour Master+."""
+        """Vérifie l'affichage compact pour Master (M), GM, Chall."""
         cog._save_user(123, "puuid", "Pro", "Tag")
 
         mock_guild = MagicMock()
@@ -692,12 +693,79 @@ class TestCoverageGaps:
         cog.league_service.make_profile.return_value = {
             "name": "Pro",
             "tag": "Tag",
-            "level": 500,
-            "rankedStats": {"soloq": {"tier": "MASTER", "rank": "I", "lp": 400, "wins": 100, "losses": 50, "winrate": 66.6}, "flex": None},
+            "level": 999,
+            "rankedStats": {"soloq": {"tier": "MASTER", "rank": "I", "lp": 800, "wins": 100, "losses": 50, "winrate": 66.6}, "flex": None},
         }
 
         embed = await cog._create_leaderboard_embed(mock_guild)
 
-        # On vérifie que "Master I" n'apparaît pas, mais juste "Master"
-        # Le format dans le code est : f"{tier} • {lp} LP"
-        assert "Master • 400 LP" in embed.description
+        # VERIFICATION FORMAT COMPACT :
+        # On cherche "M" (Master raccourci) et "800LP" (collé)
+        assert "M " in embed.description
+        assert "800LP" in embed.description
+
+    @pytest.mark.asyncio
+    async def test_create_embed_specific_short_tiers(self, cog):
+        """Couvre les abréviations spécifiques : PLAT, EMER, DIAM."""
+        # On enregistre 3 utilisateurs
+        cog._save_user(1, "p1", "PlatUser", "TAG")
+        cog._save_user(2, "p2", "EmerUser", "TAG")
+        cog._save_user(3, "p3", "DiamUser", "TAG")
+
+        mock_guild = MagicMock()
+        # On simule que les membres sont présents sur le discord
+        mock_guild.get_member.return_value = MagicMock(display_name="User")
+
+        # On simule les réponses de l'API Riot pour chaque utilisateur
+        cog.league_service.make_profile.side_effect = [
+            {
+                "name": "P1",
+                "tag": "Tag",
+                "level": 100,
+                "rankedStats": {"soloq": {"tier": "PLATINUM", "rank": "IV", "lp": 10, "wins": 0, "losses": 0, "winrate": 50}, "flex": None},
+            },
+            {
+                "name": "P2",
+                "tag": "Tag",
+                "level": 100,
+                "rankedStats": {"soloq": {"tier": "EMERALD", "rank": "IV", "lp": 10, "wins": 0, "losses": 0, "winrate": 50}, "flex": None},
+            },
+            {
+                "name": "P3",
+                "tag": "Tag",
+                "level": 100,
+                "rankedStats": {"soloq": {"tier": "DIAMOND", "rank": "IV", "lp": 10, "wins": 0, "losses": 0, "winrate": 50}, "flex": None},
+            },
+        ]
+
+        embed = await cog._create_leaderboard_embed(mock_guild)
+
+        # On vérifie que les abréviations sont bien dans la description
+        assert "PLAT" in embed.description
+        assert "EMER" in embed.description
+        assert "DIAM" in embed.description
+
+    @pytest.mark.asyncio
+    async def test_create_embed_long_name_truncation(self, cog):
+        """Couvre la troncature des noms trop longs (>10 chars)."""
+        # Un pseudo très long (18 caractères)
+        long_name = "VeryLongNameIndeed"
+        cog._save_user(1, "puuid", long_name, "TAG")
+
+        mock_guild = MagicMock()
+        mock_guild.get_member.return_value = MagicMock(display_name="User")
+
+        cog.league_service.make_profile.return_value = {
+            "name": long_name,
+            "tag": "Tag",
+            "level": 100,
+            "rankedStats": {"soloq": {"tier": "GOLD", "rank": "IV", "lp": 10, "wins": 0, "losses": 0, "winrate": 50}, "flex": None},
+        }
+
+        embed = await cog._create_leaderboard_embed(mock_guild)
+
+        # Le code coupe à 9 caractères + "…"
+        # "VeryLongNameIndeed" -> "VeryLongN…"
+        expected_name = "VeryLongN…"
+
+        assert expected_name in embed.description
