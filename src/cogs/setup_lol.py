@@ -408,7 +408,6 @@ async def setup(bot):
         logger.critical("LOLAPI manquante dans les variables d’environnement")
         return
 
-
     client = RiotApiClient(api_key)
     service = LeagueService(client)
     await bot.add_cog(SetupLol(bot, service))

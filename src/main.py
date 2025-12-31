@@ -15,6 +15,7 @@ from .utils.logger import setup_logger
 if os.getenv("ENV") != "production":
     load_dotenv()
 
+
 class DiscordBot(commands.Bot):
     """Bot Discord simple pour démarrer"""
 
@@ -127,7 +128,6 @@ async def main():
     if not token:
         logger.critical("DISCORD_TOKEN non défini dans les variables d’environnement")
         sys.exit(1)
-
 
     # Créer et lancer le bot
     bot = DiscordBot()
