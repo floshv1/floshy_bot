@@ -144,7 +144,9 @@ class SetupLol(commands.Cog):
         if "#" not in riot_id:
             return await interaction.response.send_message("❌ Format invalide. Utilisez : `Pseudo#TAG`", ephemeral=True)
         pseudo, tag = riot_id.split("#", 1)
+        logger.info(f"Requête /lol_link par {interaction.user} pour {pseudo}#{tag}")
         await self._link_account(interaction, pseudo, tag)
+        await self.refresh_leaderboard()
 
     @app_commands.command(name="lol_stats", description="Affiche les statistiques LoL d'un joueur")
     @app_commands.describe(member="Le membre dont vous voulez voir les stats (laissez vide pour vos propres stats)")
