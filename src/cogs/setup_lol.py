@@ -48,26 +48,30 @@ class SetupLol(commands.Cog):
     # GESTION DES DONNÉES
     # ============================================================================
 
-    def _save_user(self, discord_id: int, puuid: str, pseudo: str, tag: str):
-        """Enregistre ou met à jour un utilisateur dans le fichier YAML."""
+    def _save_user(self, discord_id: int, puuid: str, pseudo: str, tag: str, stats):
+        """Enregistre l'utilisateur et met en cache ses dernières stats connues."""
         logger.debug(f"Sauvegarde YAML pour {discord_id} ({pseudo}#{tag})")
 
-        # Initialisation explicite pour MyPy
         data: dict[str, Any] = {}
 
-        # Chargement des données existantes
         if os.path.exists(self.db_path):
             with open(self.db_path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
 
-        # Mise à jour des données
-        data[str(discord_id)] = {"puuid": puuid, "pseudo": pseudo, "tag": tag}
+        # On prépare l'objet utilisateur
+        user_entry = {"puuid": puuid, "pseudo": pseudo, "tag": tag}
 
-        # Sauvegarde
+        # Si on fournit des stats (lors d'un refresh réussi), on les sauvegarde
+        if stats:
+            user_entry["cached_stats"] = stats
+        # Sinon, on garde les anciennes stats s'il y en avait
+        elif str(discord_id) in data and "cached_stats" in data[str(discord_id)]:
+            user_entry["cached_stats"] = data[str(discord_id)]["cached_stats"]
+
+        data[str(discord_id)] = user_entry
+
         with open(self.db_path, "w", encoding="utf-8") as f:
             yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
-
-        logger.success(f"Données enregistrées pour {pseudo}#{tag}")
 
     def _load_users(self) -> dict:
         """Charge tous les utilisateurs depuis le fichier YAML."""
@@ -111,7 +115,7 @@ class SetupLol(commands.Cog):
         try:
             # Tentative de récupération du PUUID
             puuid = self.league_service.get_puuid(pseudo, tag)
-            self._save_user(interaction.user.id, puuid, pseudo, tag)
+            self._save_user(interaction.user.id, puuid, pseudo, tag, stats=None)
 
             embed = discord.Embed(
                 title="✅ Compte lié avec succès !",
@@ -315,67 +319,106 @@ class SetupLol(commands.Cog):
     # ============================================================================
 
     async def _create_leaderboard_embed(self, guild: discord.Guild) -> discord.Embed:
-        """Génère un leaderboard en tableau avec un alignement parfait."""
+        """Génère le leaderboard (API Live -> Fallback Cache)."""
         users = self._load_users()
         players: list[dict[str, Any]] = []
+        api_down = False  # Pour savoir si on doit changer le footer
 
-        # 1. Récupération des données
         for d_id, u_data in users.items():
-            try:
-                member = guild.get_member(int(d_id))
-                if not member:
-                    continue
+            member = guild.get_member(int(d_id))
+            if not member:
+                continue
 
-                p = self.league_service.make_profile(u_data["puuid"])
-                s = p["rankedStats"]["soloq"]
+            p = None
+            try:
+                # 1. Tentative appel API Live
+                profile = self.league_service.make_profile(u_data["puuid"])
+
+                # Si succès, on prépare les données pour l'affichage ET le cache
+                s = profile["rankedStats"]["soloq"]
+
+                # On structure ce qu'on veut sauvegarder
+                cached_data = {"name": profile["name"], "tag": profile["tag"], "level": profile["level"], "soloq": s}  # Peut être None si unranked
+
+                # Mise à jour du cache (Sauvegarde disque)
+                self._save_user(int(d_id), u_data["puuid"], u_data["pseudo"], u_data["tag"], stats=cached_data)
+
+                # On utilise ces données pour la suite
+                p = cached_data
+
+            except Exception as e:
+                # 2. Si l'API échoue, on tente de charger le CACHE
+                logger.warning(f"API Error pour {u_data['pseudo']} ({e}). Utilisation du cache.")
+                api_down = True
+
+                if "cached_stats" in u_data:
+                    p = u_data["cached_stats"]
+                else:
+                    logger.error(f"Aucun cache disponible pour {u_data['pseudo']}")
+                    continue  # Vraiment rien à afficher
+
+            # --- Construction de l'objet joueur pour le tableau ---
+            # À partir d'ici, 'p' contient les données (soit live, soit cache)
+            if p:
+                s = p["soloq"]
+                if s:
+                    # Logique de formatage identique à avant
+                    tier = s["tier"].title()
+                    if tier in ["Master", "Grandmaster", "Challenger"]:
+                        rank_str = f"{tier} • {s['lp']} LP"
+                    else:
+                        rank_str = f"{tier} {s['rank']} • {s['lp']} LP"
+
+                    stats_str = f"{s['winrate']}% WR"
+                    emoji = self._get_rank_emoji(s["tier"])
+                    sort_val = self._get_rank_value({"soloq": s})
+                else:
+                    rank_str = "Unranked"
+                    stats_str = "-"
+                    emoji = "⚫"
+                    sort_val = -1
 
                 players.append(
                     {
-                        "sort_val": self._get_rank_value({"soloq": s}),
-                        "name": f"{p['name']}#{p['tag']}",
-                        "lvl": str(p["level"]),
-                        "rank": f"{s['tier'].title()} {s['rank']} {s['lp']} LP" if s else "Unranked",
-                        "wr": f"{s['winrate']}%" if s else "0%",
+                        "sort_val": sort_val,
+                        "emoji": emoji,
+                        "name": f"{p['name']}#{p.get('tag', '')}",  # .get car le tag n'est pas toujours dans les vieux caches
+                        "rank_text": rank_str,
+                        "stats_text": stats_str,
+                        "level_text": f"Niv. {p['level']}",
                     }
                 )
-            except Exception as e:
-                logger.warning(f"Erreur joueur {u_data.get('pseudo')}: {e}")
-                continue
 
         if not players:
-            return discord.Embed(title="🏆 Classement Solo/Duo", description="Aucun joueur enregistré.", color=discord.Color.gold())
+            return discord.Embed(title="🏆 Classement", description="Aucune donnée disponible (API HS et pas de cache).", color=discord.Color.red())
 
-        # 2. Tri
+        # Tri et Affichage (inchangé)
         players.sort(key=lambda x: x["sort_val"], reverse=True)
-        top_players = players[:15]
+        top_players = players[:20]
 
-        # 3. Calcul dynamique du padding pour le pseudo (minimum 15 caractères)
-        max_name_len = max([len(p["name"]) for p in top_players] + [15])
+        max_name_len = max([len(p["name"]) for p in top_players] + [10])
+        max_rank_len = max([len(p["rank_text"]) for p in top_players] + [10])
 
-        # Largeurs fixes pour les autres colonnes
-        w_lvl = 4
-        w_rank = 18
-        w_wr = 6
-
-        # 4. Construction du tableau
-        # En-tête
-        header = f"{'Pseudo':<{max_name_len}} | {'Lvl':<{w_lvl}} | {'Rank':<{w_rank}} | {'WR':<{w_wr}}"
-        separator = "—" * (len(header) + 2)
-
-        lines = [header, separator]
-
-        for i, p in enumerate(top_players, 1):
-            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "  "
-            # Formatage de la ligne avec padding
-            line = f"{medal} {p['name']:<{max_name_len}} | {p['lvl']:<{w_lvl}} | {p['rank']:<{w_rank}} | {p['wr']:<{w_wr}}"
+        lines = []
+        for p in top_players:
+            line = f"{p['emoji']} " f"{p['name']:<{max_name_len}} : " f"{p['rank_text']:<{max_rank_len}} - " f"{p['stats_text']}"
             lines.append(line)
 
-        # 5. Création de l'Embed
-        description = f"**{len(players)} joueur(s) classé(s)**\n```text\n" + "\n".join(lines) + "\n```"
+        description = "```\n" + "\n".join(lines) + "\n```"
 
-        embed = discord.Embed(title="🏆 Classement Solo/Duo", description=description, color=discord.Color.gold())
-        embed.set_footer(text="Rafraîchi toutes les heures • /lol_link pour rejoindre")
-        # Utilisation de timezone-aware datetime pour éviter le warning MyPy
+        # Titre et couleur changent si l'API est down
+        color = discord.Color.gold() if not api_down else discord.Color.orange()
+        title = f"🏆 Leaderboard — {guild.name}"
+        if api_down:
+            title += " (⚠️ Mode Hors-Ligne)"
+
+        embed = discord.Embed(title=title, description=description, color=color)
+
+        footer_text = "Mis à jour toutes les heures"
+        if api_down:
+            footer_text = "⚠️ API Riot indisponible • Affichage des dernières données connues"
+
+        embed.set_footer(text=footer_text)
         embed.timestamp = discord.utils.utcnow()
 
         return embed
@@ -425,12 +468,16 @@ class SetupLol(commands.Cog):
 
 async def setup(bot):
     api_key = os.getenv("LOLAPI")
-    if not api_key:
-        # Correction du nom de la variable dans le log
-        logger.critical("LOLAPI non défini dans les variables d'environnement.")
-        return
 
-    client = RiotApiClient(api_key)
+    if not api_key:
+        # ON NE FAIT PLUS DE RETURN, juste un gros warning
+        logger.warning("⚠️ LOLAPI non défini ! Le bot fonctionnera uniquement avec le CACHE existant.")
+        # On peut mettre une fausse clé ou gérer le None dans le client,
+        # mais le plus simple est de laisser le code planter dans le try/except plus haut
+
+    # On initialise quand même (si pas de clé, RiotApiClient plantera aux appels,
+    # mais notre nouveau try/except dans _create_leaderboard_embed gérera ça)
+    client = RiotApiClient(api_key if api_key else "NO_KEY")
     service = LeagueService(client)
 
     cog = SetupLol(bot, service)
