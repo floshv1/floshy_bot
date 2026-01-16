@@ -780,7 +780,7 @@ class TestCreateLeaderboardEmbed:
         embed = await cog._create_leaderboard_embed(mock_guild, "soloq")
 
         # Vérifier le L devant le winrate
-        assert "L33.3% WR" in embed.description
+        assert "diff\n- Loser#TAG  : G III • 20 LP - 33.3% WR   - 30\n" in embed.description
 
     @pytest.mark.asyncio
     async def test_create_embed_flex_queue(self, cog):

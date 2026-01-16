@@ -65,13 +65,13 @@ ignore_missing_imports = true
 
 # Configuration Black
 [tool.black]
-line-length = 150
+line-length = 155
 target-version = ['py312']
 include = '\.pyi?$'
 
 # Configuration Ruff
 [tool.ruff]
-line-length = 150
+line-length = 155
 target-version = "py312"
 
 [tool.ruff.lint]

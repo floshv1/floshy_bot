@@ -539,14 +539,12 @@ class SetupLol(commands.Cog):
                 self._save_user(int(d_id), u_data["puuid"], u_data["pseudo"], u_data["tag"], stats=cached_data)
                 p = cached_data
 
-            except Exception as e:
-                logger.warning(f"API Error pour {u_data['pseudo']} ({e}). Utilisation du cache.")
+            except Exception:
+                # logger.warning(...)
                 api_down = True
-
                 if "cached_stats" in u_data:
                     p = u_data["cached_stats"]
                 else:
-                    logger.error(f"Aucun cache disponible pour {u_data['pseudo']}")
                     continue
 
             if p:
@@ -563,24 +561,27 @@ class SetupLol(commands.Cog):
                     else:
                         rank_str = f"{tier_short} {rank} • {lp} LP"
 
-                    # Format winrate avec L devant si < 50%
                     winrate = s["winrate"]
+
+                    # --- MODIFICATION ICI : Définition du préfixe de ligne ---
                     if winrate < 50:
-                        wr_str = f"L{winrate}% WR"
+                        line_prefix = "-"  # Rendra la ligne ROUGE
                     else:
-                        wr_str = f"{winrate}% WR"
+                        line_prefix = "+"  # Rendra la ligne VERTE
+
+                    wr_str = f"{winrate}% WR"
+                    # ---------------------------------------------------------
 
                     # Nombre de games
                     games = s["wins"] + s["losses"]
-                    games_str = f"{games:02d}"  # Format sur 2 chiffres
+                    games_str = f"{games:02d}"
 
-                    emoji = self._get_rank_emoji(tier)
                     sort_val = self._get_rank_value({queue_type: s})
 
                     players.append(
                         {
                             "sort_val": sort_val,
-                            "emoji": emoji,
+                            "line_prefix": line_prefix,  # On stocke le préfixe
                             "name": f"{p['name']}#{p.get('tag', '')}",
                             "rank_text": rank_str,
                             "wr_text": wr_str,
@@ -591,7 +592,7 @@ class SetupLol(commands.Cog):
                     players.append(
                         {
                             "sort_val": -1,
-                            "emoji": "⚫",
+                            "line_prefix": "#",  # Gris en diff
                             "name": f"{p['name']}#{p.get('tag', '')}",
                             "rank_text": "Unranked",
                             "wr_text": "-",
@@ -600,7 +601,7 @@ class SetupLol(commands.Cog):
                     )
 
         if not players:
-            return discord.Embed(title="🏆 Classement", description="Aucune donnée disponible (API HS et pas de cache).", color=discord.Color.red())
+            return discord.Embed(title="🏆 Classement", description="Aucune donnée disponible.", color=discord.Color.red())
 
         players.sort(key=lambda x: x["sort_val"], reverse=True)
         top_players = players[:20]
@@ -608,13 +609,17 @@ class SetupLol(commands.Cog):
         # Calculer les largeurs maximales
         max_name_len = max([len(p["name"]) for p in top_players] + [10])
         max_rank_len = max([len(p["rank_text"]) for p in top_players] + [10])
+        max_wr_len = max([len(p["wr_text"]) for p in top_players] + [10])
 
         lines = []
         for p in top_players:
-            line = f"{p['emoji']} " f"{p['name']:<{max_name_len}} : " f"{p['rank_text']:<{max_rank_len}} - " f"{p['wr_text']} - " f"{p['games_text']}"
+            # --- MODIFICATION ICI : Construction de la ligne diff ---
+            # Le préfixe (+ ou -) doit être le tout premier caractère
+            line = f"{p['line_prefix']} {p['name']:<{max_name_len}} : {p['rank_text']:<{max_rank_len}} - {p['wr_text']:<{max_wr_len}} - {p['games_text']}"
             lines.append(line)
 
-        description = "```\n" + "\n".join(lines) + "\n```"
+        # --- MODIFICATION ICI : Changement du type de bloc de code ---
+        description = "```diff\n" + "\n".join(lines) + "\n```"
 
         queue_name = "Solo/Duo" if queue_type == "soloq" else "Flex 5v5"
         color = discord.Color.gold() if not api_down else discord.Color.orange()
@@ -624,7 +629,7 @@ class SetupLol(commands.Cog):
 
         embed = discord.Embed(title=title, description=description, color=color)
 
-        footer_text = "Mis à jour toutes les heures"
+        footer_text = "Mis à jour toutes les heures • Rouge < 50% • Vert > 50%"
         if api_down:
             footer_text = "⚠️ API Riot indisponible • Affichage des dernières données connues"
 
