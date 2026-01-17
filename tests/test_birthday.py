@@ -168,21 +168,21 @@ async def test_setup_birthday(birthday_cog, mock_interaction, mock_guild, mock_c
     # On connecte le bot au serveur simulé pour que _refresh_displays travaille sur le bon objet
     birthday_cog.bot.get_guild.return_value = mock_guild
     # ---------------------
-    
+
     with patch("discord.utils.get", return_value=None):
-        
+
         await birthday_cog.setup_birthday.callback(birthday_cog, mock_interaction)
-        
+
         mock_guild.create_text_channel.assert_called_once()
         assert mock_channel.send.call_count == 2
-        
+
         with open(birthday_cog.config_path, "r") as f:
             config = yaml.safe_load(f)
-        
+
         assert str(mock_guild.id) in config
         assert config[str(mock_guild.id)]["channel_id"] == 111
 
-        mock_guild.get_channel.assert_called() 
+        mock_guild.get_channel.assert_called()
         assert mock_channel.fetch_message.call_count >= 2
 
 
@@ -199,11 +199,12 @@ async def test_yaml_errors(birthday_cog):
         # Ne doit pas lever d'exception
         birthday_cog._save_data("fake_path.yml", {"test": 1})
 
+
 @pytest.mark.asyncio
 async def test_refresh_displays_edge_cases(birthday_cog, mock_channel):
     """Teste les cas tordus du rafraîchissement."""
     guild_id = 123
-    
+
     # Setup de la config
     config = {str(guild_id): {"channel_id": 111, "msg_global_id": 999, "msg_month_id": 888}}
     with open(birthday_cog.config_path, "w") as f:
@@ -217,10 +218,10 @@ async def test_refresh_displays_edge_cases(birthday_cog, mock_channel):
     # Cas 2 : Le salon n'est pas un TextChannel (ex: transformé en vocal)
     mock_guild = MagicMock()
     # On crée un salon qui N'EST PAS TextChannel
-    voice_channel = MagicMock(spec=discord.VoiceChannel) 
+    voice_channel = MagicMock(spec=discord.VoiceChannel)
     mock_guild.get_channel.return_value = voice_channel
     birthday_cog.bot.get_guild.return_value = mock_guild
-    
+
     await birthday_cog._refresh_displays(guild_id)
     # Le code doit s'arrêter à "if not isinstance(..., TextChannel)"
     # On vérifie que fetch_message n'est JAMAIS appelé
@@ -231,9 +232,10 @@ async def test_refresh_displays_edge_cases(birthday_cog, mock_channel):
     mock_guild.get_channel.return_value = mock_channel
     # On simule une erreur 404 Not Found sur le fetch_message
     mock_channel.fetch_message.side_effect = discord.NotFound(MagicMock(), "Msg deleted")
-    
+
     await birthday_cog._refresh_displays(guild_id)
     # Doit logger un warning mais pas crasher
+
 
 @pytest.mark.asyncio
 async def test_reminder_task_logic(birthday_cog, mock_guild, mock_channel):
@@ -250,16 +252,16 @@ async def test_reminder_task_logic(birthday_cog, mock_guild, mock_channel):
     mock_guild.text_channels = [mock_channel]
     mock_channel.name = "général"
     birthday_cog.bot.guilds = [mock_guild]
-    
+
     # 3. Mocker datetime pour simuler le 10 Janvier à 00:00:00
     # C'est la partie critique : on force 'now'
     target_time = datetime(2024, 1, 10, 0, 0, 0)
-    
+
     with patch("src.cogs.birthday.datetime") as mock_dt:
         mock_dt.now.return_value = target_time
         # Important pour `paris_tz`
         mock_dt.now.side_effect = lambda tz=None: target_time
-        
+
         # 4. On appelle directement la coroutine de la tâche (sans la loop)
         # On accède à la fonction originale décorée via .coro
         await birthday_cog.reminder_task.coro(birthday_cog)
@@ -269,4 +271,4 @@ async def test_reminder_task_logic(birthday_cog, mock_guild, mock_channel):
     mock_channel.send.assert_called_once()
     sent_text = mock_channel.send.call_args[0][0]
     assert "JOYEUX ANNIVERSAIRE" in sent_text
-    assert "<@123>" in sent_text # Mention de l'user
+    assert "<@123>" in sent_text  # Mention de l'user

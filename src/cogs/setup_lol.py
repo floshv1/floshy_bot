@@ -1,8 +1,9 @@
-# src/cogs/setup_lol.py - Version améliorée avec nouveaux leaderboards
+# src/cogs/setup_lol.py - Version corrigée (Doublon supprimé & Path fix)
 
 import os
-from datetime import datetime, timedelta
-from typing import Any, Optional
+from datetime import datetime
+from datetime import time as dt_time
+from typing import Any, Optional, TypedDict
 
 import discord
 import yaml
@@ -13,6 +14,11 @@ from loguru import logger
 from src.lol.client import RiotApiClient
 from src.lol.exceptions import InvalidApiKey, PlayerNotFound, RateLimited
 from src.lol.service import LeagueService
+
+
+class LPChange(TypedDict):
+    name: str
+    change: int
 
 
 class SetupLol(commands.Cog):
@@ -29,25 +35,27 @@ class SetupLol(commands.Cog):
         self.league_service = league_service
         self.db_path = db_path
         self.config_path = config_path
-        self.history_path = history_path
+        # CORRECTION : On assigne history_path à lp_tracking_path pour éviter l'AttributeError
+        self.lp_tracking_path = history_path
 
         # Création des dossiers
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
-        os.makedirs(os.path.dirname(self.history_path), exist_ok=True)
+        os.makedirs(os.path.dirname(self.lp_tracking_path), exist_ok=True)
 
         self._start_tasks = start_tasks
 
     async def cog_load(self):
         """Appelé automatiquement quand le cog est chargé"""
         self.refresh_leaderboard.start()
-        self.track_lp_changes.start()
-        logger.success("Tasks refresh_leaderboard et track_lp_changes démarrées")
+        # CORRECTION : Utilisation du bon nom de tâche
+        self.daily_lp_reset.start()
+        logger.success("Tasks refresh_leaderboard et daily_lp_reset démarrées")
 
     def cog_unload(self):
         """Appelé quand le cog est déchargé"""
         self.refresh_leaderboard.cancel()
-        self.track_lp_changes.cancel()
+        self.daily_lp_reset.cancel()
 
     # ============================================================================
     # GESTION DES DONNÉES
@@ -83,28 +91,40 @@ class SetupLol(commands.Cog):
         with open(self.db_path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
 
-    def _save_config(self, guild_id: int, channel_id: int, message_id: int, queue_type: str = "soloq"):
-        """Sauvegarde la config du leaderboard permanent."""
+    def _save_config(self, guild_id: int, channel_id: int, message_id: int, queue_type: str = "soloq", config_type: str = "leaderboard"):
+        """Sauvegarde la config des messages permanents."""
         config: dict[str, Any] = {}
         if os.path.exists(self.config_path):
             with open(self.config_path, "r", encoding="utf-8") as f:
                 config = yaml.safe_load(f) or {}
 
-        if "leaderboards" not in config:
-            config["leaderboards"] = {}
+        if config_type == "leaderboard":
+            if "leaderboards" not in config:
+                config["leaderboards"] = {}
 
-        if str(guild_id) not in config["leaderboards"]:
-            config["leaderboards"][str(guild_id)] = {}
+            if str(guild_id) not in config["leaderboards"]:
+                config["leaderboards"][str(guild_id)] = {}
 
-        config["leaderboards"][str(guild_id)][queue_type] = {
-            "channel_id": channel_id,
-            "message_id": message_id,
-        }
+            config["leaderboards"][str(guild_id)][queue_type] = {
+                "channel_id": channel_id,
+                "message_id": message_id,
+            }
+        elif config_type == "lp_recap":
+            if "lp_recaps" not in config:
+                config["lp_recaps"] = {}
+
+            if str(guild_id) not in config["lp_recaps"]:
+                config["lp_recaps"][str(guild_id)] = {}
+
+            config["lp_recaps"][str(guild_id)][queue_type] = {
+                "channel_id": channel_id,
+                "message_id": message_id,
+            }
 
         with open(self.config_path, "w", encoding="utf-8") as f:
             yaml.dump(config, f, default_flow_style=False)
 
-        logger.success(f"Config leaderboard {queue_type} sauvegardée pour guild {guild_id}")
+        logger.success(f"Config {config_type} {queue_type} sauvegardée pour guild {guild_id}")
 
     def _load_config(self) -> dict:
         """Charge la configuration."""
@@ -114,85 +134,20 @@ class SetupLol(commands.Cog):
         with open(self.config_path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
 
-    def _save_lp_snapshot(self, discord_id: int, queue_type: str, lp_data: dict):
-        """Sauvegarde un snapshot de LP pour le tracking."""
-        history: dict[str, Any] = {}
+    def _save_lp_tracking(self, data: dict):
+        """Sauvegarde les données de tracking LP."""
+        with open(self.lp_tracking_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f, default_flow_style=False)
 
-        if os.path.exists(self.history_path):
-            with open(self.history_path, "r", encoding="utf-8") as f:
-                history = yaml.safe_load(f) or {}
-
-        user_key = str(discord_id)
-        if user_key not in history:
-            history[user_key] = {}
-
-        if queue_type not in history[user_key]:
-            history[user_key][queue_type] = []
-
-        # Ajouter le snapshot avec timestamp
-        snapshot = {
-            "timestamp": datetime.utcnow().isoformat(),
-            "tier": lp_data["tier"],
-            "rank": lp_data.get("rank", "I"),
-            "lp": lp_data["lp"],
-            "wins": lp_data["wins"],
-            "losses": lp_data["losses"],
-        }
-
-        history[user_key][queue_type].append(snapshot)
-
-        # Garder seulement les 7 derniers jours
-        cutoff = datetime.utcnow() - timedelta(days=7)
-        history[user_key][queue_type] = [s for s in history[user_key][queue_type] if datetime.fromisoformat(s["timestamp"]) > cutoff]
-
-        with open(self.history_path, "w", encoding="utf-8") as f:
-            yaml.dump(history, f, default_flow_style=False)
-
-    def _load_lp_history(self) -> dict:
-        """Charge l'historique de LP."""
-        if not os.path.exists(self.history_path):
+    def _load_lp_tracking(self) -> dict:
+        """Charge les données de tracking LP."""
+        if not os.path.exists(self.lp_tracking_path):
             return {}
 
-        with open(self.history_path, "r", encoding="utf-8") as f:
+        with open(self.lp_tracking_path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
 
-    def _calculate_lp_change(self, discord_id: int, queue_type: str, period: str = "day") -> Optional[int]:
-        """Calcule le changement de LP sur une période donnée."""
-        history = self._load_lp_history()
-        user_key = str(discord_id)
-
-        if user_key not in history or queue_type not in history[user_key]:
-            return None
-
-        snapshots = history[user_key][queue_type]
-        if not snapshots:
-            return None
-
-        # Déterminer la période
-        if period == "day":
-            cutoff = datetime.utcnow() - timedelta(days=1)
-        else:  # hour
-            cutoff = datetime.utcnow() - timedelta(hours=1)
-
-        # Trouver le snapshot le plus récent dans la période
-        old_snapshot = None
-        for snapshot in snapshots:
-            ts = datetime.fromisoformat(snapshot["timestamp"])
-            if ts <= cutoff:
-                old_snapshot = snapshot
-
-        if not old_snapshot:
-            return None
-
-        current_snapshot = snapshots[-1]
-
-        # Calculer la différence de LP
-        old_total_lp = self._get_total_lp(old_snapshot)
-        current_total_lp = self._get_total_lp(current_snapshot)
-
-        return current_total_lp - old_total_lp
-
-    def _get_total_lp(self, rank_data: dict) -> int:  # <--- Ajout du type de retour
+    def _get_total_lp(self, rank_data: dict) -> int:
         """Convertit un rang en LP total pour comparaison."""
         tier_values = {
             "IRON": 0,
@@ -210,12 +165,41 @@ class SetupLol(commands.Cog):
 
         tier = rank_data["tier"]
         rank = rank_data.get("rank", "I")
-        lp = int(rank_data["lp"])  # <--- Conversion explicite en int
+        lp = int(rank_data["lp"])
 
         if tier in ["MASTER", "GRANDMASTER", "CHALLENGER"]:
             return tier_values[tier] + lp
 
         return tier_values.get(tier, 0) + rank_values.get(rank, 0) + lp
+
+    def _initialize_lp_tracking(self, discord_id: int, queue_type: str, current_lp: int):
+        """Initialise le tracking LP pour un utilisateur."""
+        tracking = self._load_lp_tracking()
+        user_key = str(discord_id)
+
+        if user_key not in tracking:
+            tracking[user_key] = {}
+
+        if queue_type not in tracking[user_key]:
+            tracking[user_key][queue_type] = {
+                "start_lp": current_lp,
+                "start_date": datetime.utcnow().strftime("%d/%m/%Y"),
+                "daily_lp": current_lp,
+                "last_reset": datetime.utcnow().strftime("%d/%m/%Y"),
+            }
+            self._save_lp_tracking(tracking)
+            logger.info(f"LP tracking initialisé pour {discord_id} ({queue_type}): {current_lp} LP")
+
+    def _get_lp_change(self, discord_id: int, queue_type: str, current_lp: int) -> int:
+        """Calcule le changement de LP depuis le dernier reset."""
+        tracking = self._load_lp_tracking()
+        user_key = str(discord_id)
+
+        if user_key not in tracking or queue_type not in tracking[user_key]:
+            return 0
+
+        daily_lp = int(tracking[user_key][queue_type].get("daily_lp", current_lp))
+        return current_lp - daily_lp
 
     async def _link_account(self, interaction: discord.Interaction, pseudo: str, tag: str):
         await interaction.response.defer(ephemeral=True)
@@ -223,6 +207,16 @@ class SetupLol(commands.Cog):
         try:
             puuid = self.league_service.get_puuid(pseudo, tag)
             self._save_user(interaction.user.id, puuid, pseudo, tag, stats=None)
+
+            # Initialiser le tracking LP
+            try:
+                profile = self.league_service.make_profile(puuid)
+                for queue_type in ["soloq", "flex"]:
+                    if profile["rankedStats"][queue_type]:
+                        current_lp = self._get_total_lp(profile["rankedStats"][queue_type])
+                        self._initialize_lp_tracking(interaction.user.id, queue_type, current_lp)
+            except Exception as e:
+                logger.warning(f"Impossible d'initialiser le tracking LP: {e}")
 
             embed = discord.Embed(
                 title="✅ Compte lié avec succès !",
@@ -257,7 +251,10 @@ class SetupLol(commands.Cog):
         pseudo, tag = riot_id.split("#", 1)
         logger.info(f"Requête /lol_link par {interaction.user} pour {pseudo}#{tag}")
         await self._link_account(interaction, pseudo, tag)
-        await self.refresh_leaderboard()
+
+        # Pour forcer le refresh, on appelle directement la coroutine interne du Loop
+        # car refresh_leaderboard est un objet Loop non awaitable directement.
+        await self.refresh_leaderboard.coro(self)
 
     @app_commands.command(name="lol_stats", description="Affiche les statistiques LoL d'un joueur")
     @app_commands.describe(member="Le membre dont vous voulez voir les stats (laissez vide pour vos propres stats)")
@@ -295,15 +292,16 @@ class SetupLol(commands.Cog):
 
             embed.add_field(name="📈 Niveau", value=f"**{profile['level']}**", inline=True)
 
-            # Stats Ranked Solo/Duo avec changement de LP
+            # Stats Ranked Solo/Duo
             soloq = profile["rankedStats"]["soloq"]
             if soloq:
                 rank_emoji = self._get_rank_emoji(soloq["tier"])
-                lp_change_day = self._calculate_lp_change(target.id, "soloq", "day")
+                current_lp = self._get_total_lp(soloq)
+                lp_change = self._get_lp_change(target.id, "soloq", current_lp)
                 lp_change_str = ""
-                if lp_change_day is not None:
-                    sign = "+" if lp_change_day >= 0 else ""
-                    lp_change_str = f"\n📊 {sign}{lp_change_day} LP (24h)"
+                if lp_change != 0:
+                    sign = "+" if lp_change >= 0 else ""
+                    lp_change_str = f"\n📊 {sign}{lp_change} LP (aujourd'hui)"
 
                 soloq_text = (
                     f"{rank_emoji} **{soloq['tier'].title()} {soloq['rank']}** - {soloq['lp']} LP\n"
@@ -315,15 +313,16 @@ class SetupLol(commands.Cog):
 
             embed.add_field(name="🏆 Solo/Duo", value=soloq_text, inline=False)
 
-            # Stats Ranked Flex avec changement de LP
+            # Stats Ranked Flex
             flex = profile["rankedStats"]["flex"]
             if flex:
                 rank_emoji = self._get_rank_emoji(flex["tier"])
-                lp_change_day = self._calculate_lp_change(target.id, "flex", "day")
+                current_lp = self._get_total_lp(flex)
+                lp_change = self._get_lp_change(target.id, "flex", current_lp)
                 lp_change_str = ""
-                if lp_change_day is not None:
-                    sign = "+" if lp_change_day >= 0 else ""
-                    lp_change_str = f"\n📊 {sign}{lp_change_day} LP (24h)"
+                if lp_change != 0:
+                    sign = "+" if lp_change >= 0 else ""
+                    lp_change_str = f"\n📊 {sign}{lp_change} LP (aujourd'hui)"
 
                 flex_text = (
                     f"{rank_emoji} **{flex['tier'].title()} {flex['rank']}** - {flex['lp']} LP\n"
@@ -377,68 +376,32 @@ class SetupLol(commands.Cog):
             logger.exception("Erreur lors du setup du leaderboard")
             await interaction.followup.send(f"❌ Erreur lors de la création du leaderboard : {e}", ephemeral=True)
 
-    @app_commands.command(name="lol_lp_recap", description="Affiche le récapitulatif de gain/perte de LP")
-    @app_commands.describe(period="Période de récapitulatif", queue_type="Type de file")
-    @app_commands.choices(
-        period=[app_commands.Choice(name="Dernière heure", value="hour"), app_commands.Choice(name="Dernières 24 heures", value="day")],
-        queue_type=[app_commands.Choice(name="Solo/Duo", value="soloq"), app_commands.Choice(name="Flex 5v5", value="flex")],
-    )
-    async def lol_lp_recap(self, interaction: discord.Interaction, period: str = "day", queue_type: str = "soloq"):
-        """Affiche un récapitulatif des changements de LP."""
+    @app_commands.command(name="lol_lp_recap_setup", description="Configure un récapitulatif LP quotidien permanent")
+    @app_commands.describe(channel="Le salon où afficher le récapitulatif LP", queue_type="Type de file (Solo/Duo ou Flex)")
+    @app_commands.choices(queue_type=[app_commands.Choice(name="Solo/Duo", value="soloq"), app_commands.Choice(name="Flex 5v5", value="flex")])
+    @app_commands.default_permissions(administrator=True)
+    async def lol_lp_recap_setup(self, interaction: discord.Interaction, channel: discord.TextChannel, queue_type: str = "soloq"):
+        """Configure un récapitulatif LP quotidien permanent."""
         if not interaction.guild:
             return await interaction.response.send_message("❌ Cette commande doit être utilisée sur un serveur.", ephemeral=True)
 
-        await interaction.response.defer()
+        logger.info(f"Setup LP recap {queue_type} par {interaction.user} dans {channel}")
+        await interaction.response.defer(ephemeral=True)
 
-        users = self._load_users()
-        # Explicit type hinting for the list ensures mypy knows the structure
-        changes: list[dict[str, Any]] = []
+        try:
+            embed = await self._create_lp_recap_embed(interaction.guild, queue_type)
+            message = await channel.send(embed=embed)
+            self._save_config(interaction.guild.id, channel.id, message.id, queue_type, "lp_recap")
 
-        for d_id, u_data in users.items():
-            member = interaction.guild.get_member(int(d_id))
-            if not member:
-                continue
-
-            lp_change = self._calculate_lp_change(int(d_id), queue_type, period)
-            if lp_change is None:
-                continue
-
-            changes.append({"member": member, "name": f"{u_data['pseudo']}#{u_data['tag']}", "change": lp_change})
-
-        if not changes:
-            period_text = "de la dernière heure" if period == "hour" else "des dernières 24 heures"
             queue_name = "Solo/Duo" if queue_type == "soloq" else "Flex 5v5"
-            embed_error = discord.Embed(
-                title="❌ Aucune donnée disponible",
-                description=f"Aucune donnée de LP disponible pour la période {period_text} en {queue_name}.",
-                color=discord.Color.red(),
+            await interaction.followup.send(
+                f"✅ Récapitulatif LP {queue_name} permanent créé dans {channel.mention}\n" f"🔄 Il se mettra à jour automatiquement tous les jours à 0h.",
+                ephemeral=True,
             )
-            return await interaction.followup.send(embed=embed_error)
 
-        # Fix: Cast to int in lambda so sort knows how to compare
-        changes.sort(key=lambda x: int(x["change"]), reverse=True)
-
-        # Créer l'embed
-        period_text = "Dernière heure" if period == "hour" else "Dernières 24h"
-        queue_name = "Solo/Duo" if queue_type == "soloq" else "Flex 5v5"
-
-        embed = discord.Embed(title=f"📊 Récapitulatif LP - {queue_name}", description=f"**{period_text}**", color=discord.Color.gold())
-
-        lines = []
-        for i, change_data in enumerate(changes[:20], 1):
-            # Fix: Explicitly extract as int to satisfy mypy comparators
-            amount = int(change_data["change"])
-
-            sign = "+" if amount >= 0 else ""
-            emoji = "📈" if amount > 0 else "📉" if amount < 0 else "➖"
-            lines.append(f"{i}. {emoji} **{change_data['name']}** : {sign}{amount} LP")
-
-        # Fix: Handle Optional[str] for embed.description
-        current_desc = embed.description or ""
-        embed.description = current_desc + "\n\n" + "\n".join(lines)
-        embed.timestamp = discord.utils.utcnow()
-
-        await interaction.followup.send(embed=embed)
+        except Exception as e:
+            logger.exception("Erreur lors du setup du LP recap")
+            await interaction.followup.send(f"❌ Erreur lors de la création du récapitulatif LP : {e}", ephemeral=True)
 
     # ============================================================================
     # TÂCHES PÉRIODIQUES
@@ -484,32 +447,81 @@ class SetupLol(commands.Cog):
             except Exception:
                 logger.exception(f"Erreur lors du refresh des leaderboards pour guild {guild_id}")
 
-    @tasks.loop(hours=1)
-    async def track_lp_changes(self):
-        """Enregistre les changements de LP toutes les heures."""
-        logger.info("Début du tracking de LP")
+    @tasks.loop(time=dt_time(hour=0, minute=0))  # Tous les jours à minuit UTC
+    async def daily_lp_reset(self):
+        """Reset quotidien du tracking LP et mise à jour des récapitulatifs."""
+        logger.info("Début du reset quotidien LP")
 
         users = self._load_users()
+        tracking = self._load_lp_tracking()
+        today = datetime.utcnow().strftime("%d/%m/%Y")
 
+        # Reset des LP pour tous les utilisateurs
         for d_id, u_data in users.items():
             try:
                 profile = self.league_service.make_profile(u_data["puuid"])
 
-                # Enregistrer soloq
-                if profile["rankedStats"]["soloq"]:
-                    self._save_lp_snapshot(int(d_id), "soloq", profile["rankedStats"]["soloq"])
+                for queue_type in ["soloq", "flex"]:
+                    if profile["rankedStats"][queue_type]:
+                        current_lp = self._get_total_lp(profile["rankedStats"][queue_type])
+                        user_key = str(d_id)
 
-                # Enregistrer flex
-                if profile["rankedStats"]["flex"]:
-                    self._save_lp_snapshot(int(d_id), "flex", profile["rankedStats"]["flex"])
+                        if user_key not in tracking:
+                            tracking[user_key] = {}
 
-                logger.debug(f"LP tracked pour {u_data['pseudo']}#{u_data['tag']}")
+                        if queue_type not in tracking[user_key]:
+                            tracking[user_key][queue_type] = {
+                                "start_lp": current_lp,
+                                "start_date": today,
+                            }
+
+                        tracking[user_key][queue_type]["daily_lp"] = current_lp
+                        tracking[user_key][queue_type]["last_reset"] = today
+
+                logger.debug(f"LP reset pour {u_data['pseudo']}#{u_data['tag']}")
 
             except Exception as e:
-                logger.warning(f"Erreur tracking LP pour {u_data['pseudo']}: {e}")
+                logger.warning(f"Erreur reset LP pour {u_data.get('pseudo', 'unknown')}: {e}")
+
+        self._save_lp_tracking(tracking)
+
+        # Mise à jour des récapitulatifs LP permanents
+        config = self._load_config()
+        if "lp_recaps" not in config:
+            return
+
+        for guild_id, recap_configs in config["lp_recaps"].items():
+            try:
+                guild = self.bot.get_guild(int(guild_id))
+                if not guild:
+                    logger.warning(f"Guild {guild_id} introuvable")
+                    continue
+
+                for queue_type, recap_config in recap_configs.items():
+                    try:
+                        channel = guild.get_channel(recap_config["channel_id"])
+                        if not channel:
+                            logger.warning(f"Channel {recap_config['channel_id']} introuvable")
+                            continue
+
+                        try:
+                            message = await channel.fetch_message(recap_config["message_id"])
+                        except discord.NotFound:
+                            logger.warning(f"Message recap {recap_config['message_id']} introuvable")
+                            continue
+
+                        embed = await self._create_lp_recap_embed(guild, queue_type)
+                        await message.edit(embed=embed)
+                        logger.success(f"LP recap {queue_type} mis à jour pour guild {guild_id}")
+
+                    except Exception:
+                        logger.exception(f"Erreur lors de la mise à jour du recap {queue_type} pour guild {guild_id}")
+
+            except Exception:
+                logger.exception(f"Erreur lors de la mise à jour des recaps pour guild {guild_id}")
 
     @refresh_leaderboard.before_loop
-    @track_lp_changes.before_loop
+    @daily_lp_reset.before_loop
     async def before_tasks(self):
         """Attend que le bot soit prêt avant de démarrer les boucles."""
         await self.bot.wait_until_ready()
@@ -517,6 +529,74 @@ class SetupLol(commands.Cog):
     # ============================================================================
     # FONCTIONS UTILITAIRES
     # ============================================================================
+
+    async def _create_lp_recap_embed(self, guild: discord.Guild, queue_type: str = "soloq") -> discord.Embed:
+        """Génère l'embed de récapitulatif LP quotidien."""
+        users = self._load_users()
+        tracking = self._load_lp_tracking()
+        changes: list[LPChange] = []
+
+        for d_id, u_data in users.items():
+            member = guild.get_member(int(d_id))
+            if not member:
+                continue
+
+            try:
+                profile = self.league_service.make_profile(u_data["puuid"])
+
+                if profile["rankedStats"][queue_type]:
+                    current_lp = self._get_total_lp(profile["rankedStats"][queue_type])
+                    lp_change = self._get_lp_change(int(d_id), queue_type, current_lp)
+
+                    changes.append({"name": f"{u_data['pseudo']}#{u_data['tag']}", "change": lp_change})
+            except Exception as e:
+                logger.warning(f"Erreur lors du recap LP pour {u_data.get('pseudo', 'unknown')}: {e}")
+                continue
+
+        # Tri par changement décroissant
+        changes.sort(key=lambda x: x["change"], reverse=True)
+
+        # Création de l'embed
+        queue_name = "Solo/Duo" if queue_type == "soloq" else "Flex 5v5"
+        embed = discord.Embed(title=f"Récapitulatif LP - {queue_name}", color=discord.Color.gold())
+
+        if not changes:
+            embed.description = "Aucune donnée disponible"
+        else:
+            lines = []
+            for change_data in changes:
+                amount = change_data["change"]
+                sign = "+" if amount >= 0 else ""
+
+                if amount > 0:
+                    emoji = "📈"
+                elif amount < 0:
+                    emoji = "📉"
+                else:
+                    emoji = "➖"
+
+                lines.append(f"{emoji} {change_data['name']} : {sign}{amount} LP")
+
+            embed.description = "\n".join(lines)
+
+        # Footer avec les dates
+        today = datetime.utcnow().strftime("%d/%m")
+        yesterday_date = (datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)).strftime("%d/%m")
+
+        # Trouver la date de début (depuis le dernier reset)
+        start_date = yesterday_date
+        if tracking:
+            for user_data in tracking.values():
+                if queue_type in user_data:
+                    start_date = user_data[queue_type].get("last_reset", yesterday_date)
+                    if "/" in start_date and len(start_date) > 5:  # Format dd/mm/yyyy
+                        start_date = "/".join(start_date.split("/")[:2])  # Garder dd/mm
+                    break
+
+        embed.set_footer(text=f"Mise à jour à 0h - Récolte du {start_date} au {today}")
+        embed.timestamp = discord.utils.utcnow()
+
+        return embed
 
     async def _create_leaderboard_embed(self, guild: discord.Guild, queue_type: str = "soloq") -> discord.Embed:
         """Génère le leaderboard avec le nouveau format."""
