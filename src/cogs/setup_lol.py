@@ -403,6 +403,20 @@ class SetupLol(commands.Cog):
             logger.exception("Erreur lors du setup du LP recap")
             await interaction.followup.send(f"❌ Erreur lors de la création du récapitulatif LP : {e}", ephemeral=True)
 
+
+    @app_commands.command(name="lol_admin_force_update", description="Force la mise à jour manuelle de tous les joueurs (Admin)")
+    @app_commands.default_permissions(administrator=True)
+    async def lol_admin_force_update(self, interaction: discord.Interaction):
+        """Force l'exécution du scan quotidien pour initialiser les données manquantes."""
+        await interaction.response.defer(ephemeral=True)
+        try:
+            # On exécute la coroutine interne de la tâche
+            await self.daily_lp_reset.coro(self)
+            await interaction.followup.send("✅ Mise à jour forcée effectuée pour tous les joueurs.")
+        except Exception as e:
+            logger.exception("Erreur lors de la mise à jour forcée")
+            await interaction.followup.send(f"❌ Erreur : {e}")
+            
     # ============================================================================
     # TÂCHES PÉRIODIQUES
     # ============================================================================
